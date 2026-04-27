@@ -1,0 +1,33 @@
+# Secrets
+.env
+.env.production
+.env.local
+*.key
+*.pem
+secrets/
+
+# App code — cloned by bootstrap.sh, lives in its own repo
+/app/
+
+# Caddy auto-generated
+caddy_data/
+caddy_config/
+
+# Logs
+*.log
+logs/
+
+# Backups
+backups/
+*.sql.gz
+*.tar.gz
+*.pgcustom
+*.rdb
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/

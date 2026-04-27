@@ -1,0 +1,123 @@
+# BARVEA — Caddy 2 production config
+#
+# Public domains: barvea.com (apex) + www.barvea.com (canonical redirect to apex)
+# TLS: auto via Let's Encrypt (HTTP-01 challenge over port 80)
+# Backend: app:3005 (Next.js standalone, internal Docker network)
+#
+# IMPORTANT: For the FIRST deploy, uncomment the staging acme_ca line below
+# to avoid hitting Let's Encrypt rate limit (5 issuances/week/domain).
+# Once verified, comment it out and reload to issue a real certificate.
+
+{
+    email admin@barvea.com
+    # acme_ca https://acme-staging-v02.api.letsencrypt.org/directory   # ← uncomment for first run
+    servers {
+        protocols h1 h2 h3
+    }
+}
+
+# ═══════════════════════════════════════════════════════════════
+# barvea.com — primary
+# ═══════════════════════════════════════════════════════════════
+barvea.com {
+    encode zstd gzip
+
+    # Security headers (centralised here — next.config.ts also sets some;
+    # if duplicates appear in browser dev tools, remove from one side)
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        Permissions-Policy "camera=(), microphone=(), geolocation=(self), payment=(self)"
+        Cross-Origin-Opener-Policy "same-origin"
+        # Hide upstream identification
+        -Server
+        -X-Powered-By
+    }
+
+    # ─── Stripe webhook: needs raw body, generous timeout ───
+    handle_path /api/webhooks/* {
+        reverse_proxy app:3005 {
+            transport http {
+                read_timeout 60s
+                write_timeout 60s
+            }
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
+
+    # ─── Large file uploads (IFC up to 500 MB, batch CDE up to 1 GB) ───
+    @uploads path \
+        /api/v1/orgs/*/projects/*/documents/* \
+        /api/v1/orgs/*/projects/*/ifc-models* \
+        /api/v1/orgs/*/projects/*/assets/*/documents \
+        /api/v1/orgs/*/projects/*/combined-models*
+    handle @uploads {
+        request_body {
+            max_size 1GB
+        }
+        reverse_proxy app:3005 {
+            transport http {
+                read_timeout 600s
+                write_timeout 600s
+                dial_timeout 30s
+            }
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
+
+    # ─── Healthcheck: exposed without rate limit (for monitoring) ───
+    handle /api/health {
+        reverse_proxy app:3005 {
+            transport http {
+                read_timeout 10s
+            }
+        }
+    }
+
+    # ─── Static + everything else ───
+    handle {
+        # Cache Next.js immutable assets aggressively
+        @nextStatic path /_next/static/*
+        header @nextStatic Cache-Control "public, max-age=31536000, immutable"
+
+        @publicStatic path /public/*
+        header @publicStatic Cache-Control "public, max-age=86400"
+
+        reverse_proxy app:3005 {
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+            header_up Host {host}
+
+            # Sensible timeouts for non-upload traffic
+            transport http {
+                read_timeout 120s
+                write_timeout 120s
+                dial_timeout 10s
+            }
+        }
+    }
+
+    # ─── Logging ───
+    log {
+        output file /data/access.log {
+            roll_size 100MiB
+            roll_keep 14
+            roll_keep_for 720h
+        }
+        format json
+        level INFO
+    }
+}
+
+# ═══════════════════════════════════════════════════════════════
+# www.barvea.com — 301 redirect to apex
+# ═══════════════════════════════════════════════════════════════
+www.barvea.com {
+    redir https://barvea.com{uri} 301
+}

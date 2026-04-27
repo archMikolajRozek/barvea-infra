@@ -1,0 +1,89 @@
+# BARVEA — production docker-compose for VM 102 (barvea-app, 10.10.0.30)
+#
+# This compose runs ONLY the application container + Caddy reverse proxy.
+# Postgres, Redis, MinIO are NOT here — they live on VM 101 (barvea-data, 10.10.0.20)
+# as native services, accessed over the private vmbr1 bridge (10.10.0.0/24).
+#
+# Usage:
+#   1. cp .env.production.example .env.production
+#   2. Fill all secrets in .env.production (chmod 600)
+#   3. ./scripts/bootstrap.sh   # one-time: clones app, builds image, runs migrations
+#   4. docker compose --env-file .env.production up -d
+#   5. docker compose logs -f caddy   # watch for "certificate obtained"
+
+services:
+  # ───────────────────────────────────────────────────────────
+  # Next.js application
+  # Connects to barvea-data (10.10.0.20) for Postgres + Redis + MinIO.
+  # No host port binding — only reachable through Caddy.
+  # ───────────────────────────────────────────────────────────
+  app:
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+    image: barvea-app:latest
+    container_name: barvea-app
+    restart: unless-stopped
+    env_file: .env.production
+    environment:
+      NODE_ENV: production
+      PORT: "3005"
+      HOSTNAME: "0.0.0.0"
+      NEXT_TELEMETRY_DISABLED: "1"
+    networks:
+      - barvea_web
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3005/api/health >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+    # Container needs to reach 10.10.0.20 (barvea-data).
+    # Default bridge network → SNAT via host → vmbr1 → barvea-data. Works out of the box.
+    # If reachability fails, uncomment extra_hosts below.
+    # extra_hosts:
+    #   - "barvea-data:10.10.0.20"
+
+  # ───────────────────────────────────────────────────────────
+  # Caddy reverse proxy + auto Let's Encrypt
+  # Listens publicly on 80/443 (DNAT'd from 10.10.0.10 by barvea-infra).
+  # Terminates TLS, proxies to app:3005.
+  # ───────────────────────────────────────────────────────────
+  caddy:
+    image: caddy:2-alpine
+    container_name: barvea-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"        # HTTP/3 (QUIC)
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - barvea_web
+    depends_on:
+      app:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+networks:
+  barvea_web:
+    driver: bridge
+    name: barvea_web
+
+volumes:
+  caddy_data:
+    name: barvea_caddy_data
+  caddy_config:
+    name: barvea_caddy_config
