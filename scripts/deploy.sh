@@ -90,8 +90,13 @@ echo ">>> Building image..."
 docker compose --env-file .env.production build app
 
 # ─── 3. Run migrations ───
+# `npx prisma` is not on PATH inside the runtime image — Next.js standalone
+# output prunes devDeps so npx tries to fetch Prisma 7 from npm and crashes
+# on the v6 schema. Call the bundled JS entry directly. The path exists in
+# the runtime image since the c75430f Dockerfile fix.
 echo ">>> Running prisma migrate deploy..."
-docker compose --env-file .env.production run --rm app npx prisma migrate deploy
+docker compose --env-file .env.production run --rm app \
+  node node_modules/prisma/build/index.js migrate deploy
 
 # ─── 4. Recreate app ───
 echo ">>> Recreating app container..."
