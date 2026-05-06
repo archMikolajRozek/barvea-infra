@@ -81,13 +81,12 @@ if [[ ${#MISSING_EXT[@]} -gt 0 ]]; then
 fi
 
 # ─── 5. Prisma migrate deploy ───
-# `npx prisma` is not on PATH inside the production standalone Next.js image
-# (devDependency, pruned by `next build` standalone output). Call the
-# bundled JS entry directly. Long-term fix: install prisma as a runtime dep
-# in the image (RUN npm i --omit=dev prisma@<version>) so npx works.
+# The runtime image installs prisma@6.19.2 as a runtime dep (Dockerfile RUN
+# `npm install --no-save --omit=dev prisma@6.19.2`), so npx resolves the
+# local CLI from node_modules/.bin/ — no PATH workarounds needed and no
+# accidental fetch of Prisma 7 from the npm registry.
 echo ">>> [5/8] Running prisma migrate deploy..."
-docker compose --env-file .env.production run --rm app \
-  node node_modules/prisma/build/index.js migrate deploy
+docker compose --env-file .env.production run --rm app npx prisma migrate deploy
 
 # ─── 6. MinIO buckets ───
 echo ">>> [6/8] Ensuring MinIO buckets exist..."
