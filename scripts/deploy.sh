@@ -29,14 +29,42 @@ set -a
 source .env.production
 set +a
 
+# ─── Pre-flight: required env vars ───
+# Fail-early before any irreversible step (backup / git pull / migrate).
+REQUIRED_ENV=(DATABASE_URL APP_REPO_BRANCH NEXTAUTH_SECRET)
+MISSING=()
+for var in "${REQUIRED_ENV[@]}"; do
+  if [[ -z "${!var:-}" ]]; then
+    MISSING+=("$var")
+  fi
+done
+if [[ ${#MISSING[@]} -gt 0 ]]; then
+  echo "ERROR: missing required env vars in .env.production: ${MISSING[*]}"
+  exit 1
+fi
+
 # ─── Pre-deploy backup ───
 echo ">>> Creating pre-deploy backup..."
 BACKUP_DIR="$INFRA_DIR/backups/$(date +%Y%m%d_%H%M%S)_pre_deploy"
 mkdir -p "$BACKUP_DIR"
-PGURL="$DATABASE_URL"
-docker run --rm --network host postgres:18-alpine \
-  pg_dump "$PGURL" --format=custom --no-owner > "$BACKUP_DIR/pre_deploy.pgcustom"
-echo "Backup: $BACKUP_DIR/pre_deploy.pgcustom"
+
+# pg_dump rejects Prisma-style query params (?schema=public&connection_limit=...).
+# Strip everything from the first `?` onwards before passing to pg_dump.
+PGURL="$(printf '%s' "$DATABASE_URL" | cut -d'?' -f1)"
+
+BACKUP_FILE="$BACKUP_DIR/pre_deploy.pgcustom"
+if ! docker run --rm --network host postgres:18-alpine \
+    pg_dump "$PGURL" --format=custom --no-owner > "$BACKUP_FILE"; then
+  echo "ERROR: pg_dump failed. Aborting before code/migration changes."
+  rm -f "$BACKUP_FILE"
+  exit 1
+fi
+if [[ ! -s "$BACKUP_FILE" ]]; then
+  echo "ERROR: backup file is empty ($BACKUP_FILE). Aborting."
+  rm -f "$BACKUP_FILE"
+  exit 1
+fi
+echo "Backup: $BACKUP_FILE ($(stat -c%s "$BACKUP_FILE" 2>/dev/null || stat -f%z "$BACKUP_FILE") bytes)"
 
 # ─── 1. Pull latest ───
 echo ">>> Pulling latest from $APP_REPO_BRANCH..."
