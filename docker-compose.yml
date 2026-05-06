@@ -33,7 +33,10 @@ services:
     networks:
       - barvea_web
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:3005/api/health >/dev/null 2>&1 || exit 1"]
+      # Force IPv4 — `localhost` resolves to ::1 (IPv6) in some Docker netconfigs,
+      # and Next.js bound to 0.0.0.0 isn't always reachable on the IPv6 loopback.
+      # 127.0.0.1 keeps the probe deterministic.
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3005/api/health >/dev/null 2>&1 || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5

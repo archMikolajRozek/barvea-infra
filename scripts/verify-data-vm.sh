@@ -23,6 +23,11 @@ set +a
 DATA_VM=10.10.0.20
 FAIL=0
 
+# psql chokes on Prisma-style query params (?schema=public&connection_limit=…).
+# Strip everything after the first `?` so libpq parses the URL cleanly.
+# Same pattern used in deploy.sh.
+PGURL="$(printf '%s' "$DATABASE_URL" | cut -d'?' -f1)"
+
 echo "═══════════════════════════════════════════════════════════════"
 echo "BARVEA data-layer connectivity check (barvea-data $DATA_VM)"
 echo "═══════════════════════════════════════════════════════════════"
@@ -37,7 +42,7 @@ if nc -zv $DATA_VM 5432 >/dev/null 2>&1; then echo OK; else echo FAIL; FAIL=1; f
 
 echo -n "Postgres login (barvea_app) ... "
 if docker run --rm --network host postgres:18-alpine \
-   psql "$DATABASE_URL" -tAc "SELECT 1" >/dev/null 2>&1; then
+   psql "$PGURL" -tAc "SELECT 1" >/dev/null 2>&1; then
   echo OK
 else
   echo FAIL
@@ -46,7 +51,7 @@ fi
 
 echo -n "Postgres extensions ... "
 EXT_OUT=$(docker run --rm --network host postgres:18-alpine \
-   psql "$DATABASE_URL" -tAc "SELECT extname FROM pg_extension ORDER BY extname" 2>/dev/null || echo ERR)
+   psql "$PGURL" -tAc "SELECT extname FROM pg_extension ORDER BY extname" 2>/dev/null || echo ERR)
 if echo "$EXT_OUT" | grep -q postgis; then
   echo "OK (installed: $(echo "$EXT_OUT" | tr '\n' ',' | sed 's/,$//'))"
 else
