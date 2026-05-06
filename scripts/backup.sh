@@ -3,7 +3,7 @@
 # BARVEA — daily backup (Postgres only — MinIO/Redis live on barvea-data)
 # ═══════════════════════════════════════════════════════════════
 # Cron entry (run on barvea-app):
-#   0 3 * * * /opt/barvea-infra/scripts/backup.sh >> /var/log/barvea-backup.log 2>&1
+#   0 3 * * * /home/miko/barvea/scripts/backup.sh >> /var/log/barvea-backup.log 2>&1
 #
 # Note: full backup of DATA layer (MinIO, Redis snapshot) should run on
 # barvea-data via its own cron — that VM owns the data volumes.

@@ -85,11 +85,9 @@ This repo holds **only configuration** — no application code. App code lives i
 ```bash
 # On barvea-app (10.10.0.30):
 
-# 1. Clone this infra repo
-sudo mkdir -p /opt/barvea-infra
-sudo chown $(whoami):$(whoami) /opt/barvea-infra
-cd /opt/barvea-infra
-git clone git@github.com:archMikolajRozek/barvea-infra.git .
+# 1. Clone this infra repo into your home dir
+git clone git@github.com:archMikolajRozek/barvea-infra.git ~/barvea
+cd ~/barvea
 
 # 2. Configure secrets
 cp .env.production.example .env.production
@@ -125,7 +123,10 @@ curl https://barvea.com/api/health     # no -k, must succeed
 ## Update workflow
 
 ```bash
-cd /opt/barvea-infra
+ssh -p 2277 miko@10.10.0.30
+cd ~/barvea
+git pull --ff-only origin main      # pull latest infra (deploy.sh, scripts)
+ls -la scripts/                     # verify -rwxr-xr-x on *.sh
 ./scripts/deploy.sh
 ```
 
@@ -147,7 +148,7 @@ If healthcheck fails, script prints rollback instructions including DB restore f
 If a deploy breaks production:
 
 ```bash
-cd /opt/barvea-infra/app
+cd ~/barvea/app
 git log --oneline -5                             # find previous good SHA
 git reset --hard <previous-sha>
 cd ..
@@ -157,7 +158,7 @@ docker compose --env-file .env.production up -d --no-deps --force-recreate app
 # If DB schema must also revert (broken migration):
 docker run --rm --network host postgres:18-alpine \
   pg_restore -d "$DATABASE_URL" --clean --if-exists \
-  /opt/barvea-infra/backups/<timestamp>_pre_deploy/pre_deploy.pgcustom
+  ~/barvea/backups/<timestamp>_pre_deploy/pre_deploy.pgcustom
 ```
 
 ---
@@ -166,7 +167,7 @@ docker run --rm --network host postgres:18-alpine \
 
 | What | Where | Frequency | Retention |
 |------|-------|-----------|-----------|
-| Postgres dump | barvea-app `/opt/barvea-infra/backups/` | Daily 03:00 | 14 daily + Sunday weekly + 1st of month |
+| Postgres dump | barvea-app `~/barvea/backups/` | Daily 03:00 | 14 daily + Sunday weekly + 1st of month |
 | MinIO data | barvea-data (native, separate cron) | TBD | TBD |
 | Redis snapshot | barvea-data RDB persistence | Continuous (every 60s if 1000+ writes) | RDB on disk |
 | Off-site replication | rclone → external S3/B2 | Weekly | 6 months |
@@ -229,7 +230,7 @@ On barvea-app:
 
 ```cron
 # /etc/cron.d/barvea-backup
-0 3 * * * deploy /opt/barvea-infra/scripts/backup.sh >> /var/log/barvea-backup.log 2>&1
+0 3 * * * miko /home/miko/barvea/scripts/backup.sh >> /var/log/barvea-backup.log 2>&1
 ```
 
 Add monitoring (UptimeRobot / Better Stack) to ping `https://barvea.com/api/health` every 60 s.

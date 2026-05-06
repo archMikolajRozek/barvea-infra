@@ -31,13 +31,17 @@ set +a
 
 # ─── Pre-flight: required env vars ───
 # Fail-early before any irreversible step (backup / git pull / migrate).
-REQUIRED_ENV=(DATABASE_URL APP_REPO_BRANCH NEXTAUTH_SECRET)
+REQUIRED_ENV=(DATABASE_URL APP_REPO_BRANCH)
 MISSING=()
 for var in "${REQUIRED_ENV[@]}"; do
   if [[ -z "${!var:-}" ]]; then
     MISSING+=("$var")
   fi
 done
+# NextAuth v5 reads AUTH_SECRET; v4 used NEXTAUTH_SECRET. Accept either.
+if [[ -z "${AUTH_SECRET:-}" && -z "${NEXTAUTH_SECRET:-}" ]]; then
+  MISSING+=("AUTH_SECRET (or NEXTAUTH_SECRET legacy)")
+fi
 if [[ ${#MISSING[@]} -gt 0 ]]; then
   echo "ERROR: missing required env vars in .env.production: ${MISSING[*]}"
   exit 1
