@@ -90,12 +90,12 @@ echo ">>> Building image..."
 docker compose --env-file .env.production build app
 
 # ─── 3. Run migrations ───
-# The runtime image has prisma@6.19.2 installed via Dockerfile RUN
-# `npm install --no-save --omit=dev prisma@6.19.2`, so node_modules/.bin/
-# is populated and npx resolves the local CLI. No fallback to fetching
-# Prisma 7 from the npm registry, which would crash on the v6 schema.
+# Prisma CLI is installed at /opt/prisma-cli inside the runtime image (see
+# the app Dockerfile) and symlinked to /usr/local/bin/prisma. Calling the
+# binary directly avoids npx's "fall through to npm registry" path that
+# could otherwise pull Prisma 7 and crash on the v6 schema.
 echo ">>> Running prisma migrate deploy..."
-docker compose --env-file .env.production run --rm app npx prisma migrate deploy
+docker compose --env-file .env.production run --rm app prisma migrate deploy
 
 # ─── 4. Recreate app ───
 echo ">>> Recreating app container..."

@@ -81,12 +81,12 @@ if [[ ${#MISSING_EXT[@]} -gt 0 ]]; then
 fi
 
 # ─── 5. Prisma migrate deploy ───
-# The runtime image installs prisma@6.19.2 as a runtime dep (Dockerfile RUN
-# `npm install --no-save --omit=dev prisma@6.19.2`), so npx resolves the
-# local CLI from node_modules/.bin/ — no PATH workarounds needed and no
-# accidental fetch of Prisma 7 from the npm registry.
+# Prisma CLI is installed at /opt/prisma-cli inside the runtime image and
+# symlinked to /usr/local/bin/prisma (see the app Dockerfile). Calling the
+# binary directly skips npx's registry fallback so we never accidentally
+# fetch Prisma 7 and crash on the v6 schema.
 echo ">>> [5/8] Running prisma migrate deploy..."
-docker compose --env-file .env.production run --rm app npx prisma migrate deploy
+docker compose --env-file .env.production run --rm app prisma migrate deploy
 
 # ─── 6. MinIO buckets ───
 echo ">>> [6/8] Ensuring MinIO buckets exist..."
