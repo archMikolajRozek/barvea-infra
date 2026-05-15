@@ -30,8 +30,12 @@ services:
       PORT: "3005"
       HOSTNAME: "0.0.0.0"
       NEXT_TELEMETRY_DISABLED: "1"
+      DWG_CONVERTER_URL: "http://dwg-converter:8080"
     networks:
       - barvea_web
+    depends_on:
+      dwg-converter:
+        condition: service_healthy
     healthcheck:
       # Force IPv4 — `localhost` resolves to ::1 (IPv6) in some Docker netconfigs,
       # and Next.js bound to 0.0.0.0 isn't always reachable on the IPv6 loopback.
@@ -51,6 +55,35 @@ services:
     # If reachability fails, uncomment extra_hosts below.
     # extra_hosts:
     #   - "barvea-data:10.10.0.20"
+
+  # ───────────────────────────────────────────────────────────
+  # DWG → SVG/PDF converter microservice
+  # LibreDWG-based Flask app. Receives DWG buffers from `app`,
+  # returns SVG (primary) or PDF (paperspace fallback). Internal
+  # only — never exposed on host port. dwg2dxf is built into the
+  # image but no longer used as a preview format (DXF output from
+  # LibreDWG misaligns browser parsers; see lib/dwg-converter.ts).
+  # ───────────────────────────────────────────────────────────
+  dwg-converter:
+    build:
+      context: ./app/docker/dwg-converter
+      dockerfile: Dockerfile
+    image: barvea-dwg-converter:latest
+    container_name: barvea-dwg-converter
+    restart: unless-stopped
+    networks:
+      - barvea_web
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
 
   # ───────────────────────────────────────────────────────────
   # Caddy reverse proxy + auto Let's Encrypt

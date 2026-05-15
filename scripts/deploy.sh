@@ -85,9 +85,11 @@ if [[ "$PREVIOUS_SHA" == "$NEW_SHA" ]]; then
   exit 0
 fi
 
-# ─── 2. Build new image ───
-echo ">>> Building image..."
+# ─── 2. Build new images ───
+echo ">>> Building app image..."
 docker compose --env-file .env.production build app
+echo ">>> Building dwg-converter image..."
+docker compose --env-file .env.production build dwg-converter
 
 # ─── 3. Run migrations ───
 # Prisma CLI is installed at /opt/prisma-cli inside the runtime image (see
@@ -97,7 +99,9 @@ docker compose --env-file .env.production build app
 echo ">>> Running prisma migrate deploy..."
 docker compose --env-file .env.production run --rm app prisma migrate deploy
 
-# ─── 4. Recreate app ───
+# ─── 4. Recreate containers ───
+echo ">>> Recreating dwg-converter container..."
+docker compose --env-file .env.production up -d --no-deps --force-recreate dwg-converter
 echo ">>> Recreating app container..."
 docker compose --env-file .env.production up -d --no-deps --force-recreate app
 
