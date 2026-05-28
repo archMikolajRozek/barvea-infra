@@ -22,6 +22,20 @@
 barvea.com {
     encode zstd gzip
 
+    # ─── mTLS for Drive client (optional — mode=request) ───
+    # Caddy requests but does NOT require a client cert. Browsers that don't
+    # present one still complete the TLS handshake normally. Drive client
+    # presents a device cert issued by our Vault pki_int; Caddy verifies
+    # against root-ca and forwards cert metadata via headers. Per-endpoint
+    # enforcement happens in the Next.js app (e.g. /api/v1/devices/* requires
+    # presented cert except /enroll which accepts bootstrap_token).
+    tls {
+        client_auth {
+            mode request
+            trusted_ca_cert_file /etc/ssl/barvea/root-ca.crt
+        }
+    }
+
     # Security headers (centralised here — next.config.ts also sets some;
     # if duplicates appear in browser dev tools, remove from one side)
     header {
@@ -93,6 +107,11 @@ barvea.com {
             header_up X-Forwarded-For {remote_host}
             header_up X-Forwarded-Proto {scheme}
             header_up Host {host}
+
+            # mTLS cert metadata (empty if client didn't present a cert)
+            header_up X-Client-Cert-Subject {tls_client_subject}
+            header_up X-Client-Cert-Issuer {tls_client_issuer}
+            header_up X-Client-Cert-Serial {tls_client_serial}
 
             # Sensible timeouts for non-upload traffic
             transport http {
