@@ -13,6 +13,12 @@
     # acme_ca https://acme-staging-v02.api.letsencrypt.org/directory   # ← uncomment for first run
     servers {
         protocols h1 h2 h3
+        # Behind Cloudflare: trust CF edge so {client_ip} resolves to the real
+        # visitor (not the CF 172.64/13 etc. edge IP). Needed for bootstrap_token
+        # IP-binding at /devices/enroll. CF ranges from cloudflare.com/ips —
+        # refresh if CF publishes new ranges. NOT spoofable: Caddy only trusts
+        # X-Forwarded-For from these IPs; a direct-to-origin client's XFF is ignored.
+        trusted_proxies static 173.245.48.0/20 103.21.244.0/22 103.22.200.0/22 103.31.4.0/22 141.101.64.0/18 108.162.192.0/18 190.93.240.0/20 188.114.96.0/20 197.234.240.0/22 198.41.128.0/17 162.158.0.0/15 104.16.0.0/13 104.24.0.0/14 172.64.0.0/13 131.0.72.0/22 2400:cb00::/32 2606:4700::/32 2803:f800::/32 2405:b500::/32 2405:8100::/32 2a06:98c0::/29 2c0f:f248::/32
     }
 }
 
@@ -56,7 +62,7 @@ barvea.com {
                 read_timeout 60s
                 write_timeout 60s
             }
-            header_up X-Real-IP {remote_host}
+            header_up X-Real-IP {client_ip}
             header_up X-Forwarded-For {remote_host}
             header_up X-Forwarded-Proto {scheme}
         }
@@ -78,7 +84,7 @@ barvea.com {
                 write_timeout 600s
                 dial_timeout 30s
             }
-            header_up X-Real-IP {remote_host}
+            header_up X-Real-IP {client_ip}
             header_up X-Forwarded-For {remote_host}
             header_up X-Forwarded-Proto {scheme}
         }
@@ -103,7 +109,7 @@ barvea.com {
         header @publicStatic Cache-Control "public, max-age=86400"
 
         reverse_proxy app:3005 {
-            header_up X-Real-IP {remote_host}
+            header_up X-Real-IP {client_ip}
             header_up X-Forwarded-For {remote_host}
             header_up X-Forwarded-Proto {scheme}
             header_up Host {host}
