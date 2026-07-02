@@ -152,7 +152,12 @@ barvea.com {
 # pin matches; device mTLS forwarded, enforced per-endpoint in app.
 # ═══════════════════════════════════════════════════════════════
 https://10.10.0.30, https://app.barvea.internal {
-    tls /etc/ssl/barvea/internal.crt /etc/ssl/barvea/internal.key
+    tls /etc/ssl/barvea/internal.crt /etc/ssl/barvea/internal.key {
+        client_auth {
+            mode request
+            trusted_ca_cert_file /etc/ssl/barvea/root-ca.crt
+        }
+    }
     encode zstd gzip
     header {
         Strict-Transport-Security "max-age=31536000"
