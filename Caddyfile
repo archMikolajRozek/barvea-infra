@@ -146,12 +146,17 @@ barvea.com {
 
 # ═══════════════════════════════════════════════════════════════
 # Internal WG-direct endpoint — Drive device API (sessions/start,
-# policy, cde, audit). Reached ONLY over the wg-users tunnel at
-# 10.10.0.30 (not public, not behind Cloudflare). Serves our pki_int
-# cert (chains to BARVEA Root CA) so the Drive client's Root-CA SPKI
-# pin matches; device mTLS forwarded, enforced per-endpoint in app.
+# policy, cde, audit). Reached ONLY over the wg-users tunnel.
+# Client resolves app.barvea.internal -> 10.10.0.30 (hosts entry or
+# ConnectCallback) and dials it over WG; Caddy matches on SNI.
+# NOTE: do NOT add the bare IP (https://10.10.0.30) as a site address
+# here — Caddy's automatic HTTPS chokes on a bare-IP site and breaks
+# TLS for the whole block (tlsv1 alert internal error). Hostname only.
+# Serves our pki_int cert (chains to BARVEA Root CA) so the Drive
+# client's Root-CA SPKI pin matches; device mTLS forwarded, enforced
+# per-endpoint in app.
 # ═══════════════════════════════════════════════════════════════
-https://10.10.0.30, https://app.barvea.internal {
+https://app.barvea.internal {
     tls /etc/ssl/barvea/internal.crt /etc/ssl/barvea/internal.key {
         client_auth {
             mode request
