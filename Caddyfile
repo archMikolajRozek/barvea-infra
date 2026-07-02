@@ -145,6 +145,48 @@ barvea.com {
 }
 
 # ═══════════════════════════════════════════════════════════════
+# Internal WG-direct endpoint — Drive device API (sessions/start,
+# policy, cde, audit). Reached ONLY over the wg-users tunnel at
+# 10.10.0.30 (not public, not behind Cloudflare). Serves our pki_int
+# cert (chains to BARVEA Root CA) so the Drive client's Root-CA SPKI
+# pin matches; device mTLS forwarded, enforced per-endpoint in app.
+# ═══════════════════════════════════════════════════════════════
+https://10.10.0.30, https://app.barvea.internal {
+    tls /etc/ssl/barvea/internal.crt /etc/ssl/barvea/internal.key {
+        client_auth {
+            mode request
+            trusted_ca_cert_file /etc/ssl/barvea/root-ca.crt
+        }
+    }
+    encode zstd gzip
+    header {
+        Strict-Transport-Security "max-age=31536000"
+        X-Content-Type-Options "nosniff"
+        -Server
+        -X-Powered-By
+    }
+    reverse_proxy app:3005 {
+        header_up X-Real-IP {client_ip}
+        header_up Host {host}
+        header_up X-Client-Cert-Subject {tls_client_subject}
+        header_up X-Client-Cert-Issuer {tls_client_issuer}
+        header_up X-Client-Cert-Serial {tls_client_serial}
+        transport http {
+            read_timeout 120s
+            write_timeout 120s
+            dial_timeout 10s
+        }
+    }
+    log {
+        output file /data/access-internal.log {
+            roll_size 50MiB
+            roll_keep 7
+        }
+        format json
+    }
+}
+
+# ═══════════════════════════════════════════════════════════════
 # www.barvea.com — 301 redirect to apex
 # ═══════════════════════════════════════════════════════════════
 www.barvea.com {
