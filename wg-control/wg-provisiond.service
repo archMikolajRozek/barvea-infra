@@ -1,0 +1,18 @@
+[Unit]
+Description=BARVEA WG peer control-plane (push receiver from app)
+After=network-online.target wg-quick@wg-users.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/sbin/wg-provisiond.py
+Restart=on-failure
+RestartSec=3
+# root wymagany: wg-users.conf (600) + wg syncconf
+User=root
+NoNewPrivileges=yes
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
