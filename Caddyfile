@@ -59,6 +59,15 @@ barvea.com {
         -X-Powered-By
     }
 
+    # ─── Drive machine-to-machine manifests (ACL/WG) — LAN-only ───
+    # Served exclusively via app.barvea.internal (WG/LAN). Blocked here on
+    # the public vhost as defense-in-depth on top of the bearer-token gate.
+    # 404 (not 403) so the paths don't advertise their existence.
+    @driveInternal path /api/v1/drive/* /api/v1/orgs/*/drive/*
+    handle @driveInternal {
+        respond 404
+    }
+
     # ─── Stripe webhook: needs raw body, generous timeout ───
     handle_path /api/webhooks/* {
         reverse_proxy app:3005 {
