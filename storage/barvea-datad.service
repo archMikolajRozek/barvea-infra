@@ -1,0 +1,16 @@
+[Unit]
+Description=BARVEA CDE data-plane (files/promote/fs-journal/fs-tree)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/sbin/barvea-datad.py
+Restart=on-failure
+RestartSec=3
+User=root
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
