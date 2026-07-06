@@ -1,33 +1,38 @@
 #!/usr/bin/env python3
 # ═══════════════════════════════════════════════════════════════
-# BARVEA Drive — ACL sync (puller). Uruchamiać na LXC 201 (storage)
-# jako root przez systemd timer (60s). Kontrakt: APP commit f19d56f.
+# BARVEA Drive — ACL sync v2 (manifest → POSIX ACL). LXC 201, root,
+# systemd timer 60s. Kontrakt v2 z APP (2026-07-07, zamrożony):
 #
-# Pull GET /api/v1/orgs/{slug}/drive/acl-manifest (Bearer token, ETag/304)
-# → reconcile POSIX ACLs na /srv/orgs/<datasetRoot>:
-#   - DOWNLOAD → r-x, WRITE/MANAGE → rwx (recursive + default ACL na dirach)
-#   - ancestor traverse: --x gdy strictVisibility, r-x gdy nie (browseable)
-#   - VIEW/NONE = brak entry (web-only, nic nie robimy)
-#   - full-state: entry (path,user) obecne w starym manifeście a nieobecne
-#     w nowym → strip. Dataset z acls:[] → strip wszystkich zarządzanych.
-#   - zarządzamy WYŁĄCZNIE wpisami u:u_* — owner/group/other/mask nietykane.
+#   AclProject.acls[]  — FOLDERY, path CONTAINER-prefixed
+#                        ("WIP/Architektura", "Shared/Architektura", …)
+#   AclProject.files[] — per-PLIK ACL, TYLKO WIP ("WIP/<tree>/<plik>")
 #
-# Config: /etc/barvea/acl-sync.env
-#   DRIVE_ACL_SERVICE_TOKEN=<hex>
-#   ORG_SLUGS=test-drive            # spacje lub przecinki
-#   APP_URL=https://app.barvea.internal   # /etc/hosts → 10.10.0.30
-#   CA_FILE=/etc/barvea/root-ca.crt
-# State: /var/lib/barvea-acl/<slug>.etag + <slug>.manifest.json
-# 304 → skip; wymuszenie pełnego re-apply (drift heal) co FORCE_INTERVAL.
+# Model aplikowania:
+#   WIP foldery:   entry na KATALOGU (bez rekursji na pliki, ZERO default
+#                  ACL) — folder-grant = wejście/listing/tworzenie; treść
+#                  plików wyłącznie z files[] (WIP-privacy per plik;
+#                  autor pliku widzi swoje jako POSIX owner).
+#   WIP pliki:     wyłącznie z files[]: DOWNLOAD→r--, WRITE/MANAGE→rw-.
+#   Shared/Published/Archive: folder-grant rekursywnie + default ACL
+#                  (jak v1) — tam nie ma per-file.
+#   STRIP:         full-state — wpis nieobecny w manifeście = zdejmowany.
+#   skippedFolders/skippedFiles = web-only → traktowane jak nieobecne.
+#   Zarządzamy WYŁĄCZNIE wpisami u:u_* (owner/group/mask/other nietykane).
+#
+# Config: /etc/barvea/acl-sync.env  (DRIVE_ACL_SERVICE_TOKEN, ORG_SLUGS,
+#   APP_URL=https://app.barvea.internal, CA_FILE=/etc/barvea/root-ca.crt)
+# State:  /var/lib/barvea-acl/<slug>.{etag,manifest.json}
 # ═══════════════════════════════════════════════════════════════
 import json, os, ssl, subprocess, sys, time, urllib.request, urllib.error
 
 CONF = "/etc/barvea/acl-sync.env"
 STATE_DIR = "/var/lib/barvea-acl"
 ORG_BASE = "/srv/orgs"
-FORCE_INTERVAL = 3600  # sekundy; pełny re-apply z cache mimo 304
+FORCE_INTERVAL = 3600
+CONTAINERS = ("WIP", "Shared", "Published", "Archive")
 
-LEVEL_PERMS = {"DOWNLOAD": "r-x", "WRITE": "rwx", "MANAGE": "rwx"}
+DIR_PERMS = {"DOWNLOAD": "r-x", "WRITE": "rwx", "MANAGE": "rwx"}
+FILE_PERMS = {"DOWNLOAD": "r--", "WRITE": "rw-", "MANAGE": "rw-"}
 failures = 0
 
 
@@ -71,7 +76,6 @@ def valid_component(c):
 
 
 def rel_parts(path):
-    """Zwaliduj i rozbij ścieżkę względną manifestu; None gdy podejrzana."""
     parts = [p for p in path.replace("\\", "/").split("/") if p]
     if not all(valid_component(p) for p in parts):
         return None
@@ -80,37 +84,49 @@ def rel_parts(path):
 
 def dataset_base(dataset_root):
     parts = rel_parts(dataset_root)
-    if not parts:
-        return None
-    return os.path.join(ORG_BASE, *parts)
+    return os.path.join(ORG_BASE, *parts) if parts else None
 
 
 def entries_map(manifest):
-    """manifest → {datasetRoot: {(path_tuple, user): level}} (tylko u_*)."""
+    """manifest → {root: {"folders": {(parts,user):lvl},
+                          "files":   {(parts,user):lvl}}}"""
     out = {}
     for proj in manifest.get("projects", []):
         root = proj.get("datasetRoot", "")
-        m = out.setdefault(root, {})
+        m = out.setdefault(root, {"folders": {}, "files": {}})
         for acl in proj.get("acls", []) or []:
             parts = rel_parts(acl.get("path", ""))
-            if parts is None:
-                warn(f"manifest: zła ścieżka {acl.get('path')!r} w {root} (skip)")
+            if parts is None or parts[0] not in CONTAINERS:
+                warn(f"manifest: folder path poza kontenerem "
+                     f"{acl.get('path')!r} w {root} (skip)")
                 continue
             for e in acl.get("entries", []) or []:
                 user = e.get("smbUsername") or ""
                 lvl = e.get("level") or ""
                 if not user.startswith("u_"):
-                    warn(f"manifest: nie-zarządzany user {user!r} (skip)")
+                    continue  # null = user bez konta SMB (jeszcze) — skip
+                if lvl not in DIR_PERMS:
+                    warn(f"manifest: level {lvl!r} dla {user} (skip)")
                     continue
-                if lvl not in LEVEL_PERMS:
-                    warn(f"manifest: nieznany level {lvl!r} dla {user} (skip)")
+                m["folders"][(tuple(parts), user)] = lvl
+        for fe in proj.get("files", []) or []:
+            parts = rel_parts(fe.get("path", ""))
+            if parts is None or len(parts) < 2 or parts[0] != "WIP":
+                warn(f"manifest: files[] poza WIP {fe.get('path')!r} (skip)")
+                continue
+            for e in fe.get("entries", []) or []:
+                user = e.get("smbUsername") or ""
+                lvl = e.get("level") or ""
+                if not user.startswith("u_"):
                     continue
-                m[(tuple(parts), user)] = lvl
+                if lvl not in FILE_PERMS:
+                    warn(f"manifest: file level {lvl!r} dla {user} (skip)")
+                    continue
+                m["files"][(tuple(parts), user)] = lvl
     return out
 
 
 def ancestors_of(base, parts):
-    """Katalogi pośrednie od base (włącznie) do rodzica celu (włącznie)."""
     out = [base]
     cur = base
     for p in parts[:-1]:
@@ -120,34 +136,60 @@ def ancestors_of(base, parts):
 
 
 def apply_dataset(base, new_m, old_m, traverse):
-    # 1. strip: wpisy które zniknęły
-    for (parts, user) in set(old_m) - set(new_m):
+    nf, nfi = new_m["folders"], new_m["files"]
+    of = old_m.get("folders", {})
+    ofi = old_m.get("files", {})
+
+    # ── strip: foldery ──
+    for (parts, user) in set(of) - set(nf):
         target = os.path.join(base, *parts)
-        if os.path.exists(target):
-            setfacl(["-R", "-x", f"u:{user}", target])
-            if os.path.isdir(target):
+        if os.path.isdir(target):
+            if parts[0] == "WIP":
+                setfacl(["-x", f"u:{user}", target])
+            else:
+                setfacl(["-R", "-x", f"u:{user}", target])
                 setfacl(["-R", "-d", "-x", f"u:{user}", target])
-        log(f"  strip u:{user} {target}")
-    # 2. apply: wszystkie z nowego (idempotentne, łapie też zmiany levelu)
-    for (parts, user), lvl in new_m.items():
-        perms = LEVEL_PERMS[lvl]
+        log(f"  strip-folder u:{user} {'/'.join(parts)}")
+    # ── strip: pliki WIP ──
+    for (parts, user) in set(ofi) - set(nfi):
+        target = os.path.join(base, *parts)
+        if os.path.isfile(target):
+            setfacl(["-x", f"u:{user}", target])
+        log(f"  strip-file u:{user} {'/'.join(parts)}")
+
+    # ── apply: foldery ──
+    for (parts, user), lvl in nf.items():
+        target = os.path.join(base, *parts)
         for d in ancestors_of(base, parts):
             if os.path.isdir(d):
                 setfacl(["-m", f"u:{user}:{traverse}", d])
-        target = os.path.join(base, *parts)
-        if not os.path.exists(target):
-            warn(f"brak ścieżki {target} (retry przy następnym pullu)")
+        if not os.path.isdir(target):
+            warn(f"brak katalogu {target} (retry przy następnym pullu)")
             continue
-        setfacl(["-R", "-m", f"u:{user}:{perms}", target])
-        if os.path.isdir(target):
-            setfacl(["-R", "-d", "-m", f"u:{user}:{perms}", target])
-    # 3. traverse cleanup: user stracił WSZYSTKIE wpisy w datasecie →
-    #    zdejmij jego wpisy z ancestorów starych ścieżek (non-recursive)
-    old_users = {u for (_, u) in old_m}
-    new_users = {u for (_, u) in new_m}
+        if parts[0] == "WIP":
+            # TYLKO katalog: wejście/listing/tworzenie. ZERO -R, ZERO -d —
+            # pliki WIP dostają ACL wyłącznie z files[] (privacy per plik).
+            setfacl(["-m", f"u:{user}:{DIR_PERMS[lvl]}", target])
+        else:
+            setfacl(["-R", "-m", f"u:{user}:{DIR_PERMS[lvl]}", target])
+            setfacl(["-R", "-d", "-m", f"u:{user}:{DIR_PERMS[lvl]}", target])
+    # ── apply: pliki WIP (wyłącznie files[]) ──
+    for (parts, user), lvl in nfi.items():
+        target = os.path.join(base, *parts)
+        for d in ancestors_of(base, parts):
+            if os.path.isdir(d):
+                setfacl(["-m", f"u:{user}:{traverse}", d])
+        if not os.path.isfile(target):
+            warn(f"brak pliku {target} (retry przy następnym pullu)")
+            continue
+        setfacl(["-m", f"u:{user}:{FILE_PERMS[lvl]}", target])
+
+    # ── traverse cleanup: user bez ŻADNYCH wpisów w datasecie ──
+    old_users = {u for (_, u) in of} | {u for (_, u) in ofi}
+    new_users = {u for (_, u) in nf} | {u for (_, u) in nfi}
     for user in old_users - new_users:
         anc = set()
-        for (parts, u) in old_m:
+        for (parts, u) in list(of) + list(ofi):
             if u == user:
                 anc.update(ancestors_of(base, parts))
         for d in sorted(anc):
@@ -170,25 +212,22 @@ def sync_org(cfg, slug):
             req.add_header("If-None-Match", et)
     try:
         with urllib.request.urlopen(req, timeout=20, context=ctx) as resp:
-            body = resp.read()
+            manifest = json.loads(resp.read())
             new_etag = resp.headers.get("ETag", "")
-            manifest = json.loads(body)
     except urllib.error.HTTPError as e:
         if e.code == 304:
-            # bez zmian — okresowy pełny re-apply z cache (drift heal)
             fresh = os.path.exists(man_f) and \
                 (time.time() - os.path.getmtime(man_f)) < FORCE_INTERVAL
             if fresh:
                 log(f"{slug}: 304, świeże — skip")
                 return
             if not os.path.exists(man_f):
-                log(f"{slug}: 304 ale brak cache — czyszczę etag, retry next")
                 os.path.exists(etag_f) and os.remove(etag_f)
                 return
             log(f"{slug}: 304, drift-heal re-apply z cache")
             with open(man_f) as f:
                 manifest = json.load(f)
-            new_etag = None  # nie ruszaj etaga
+            new_etag = None
         else:
             warn(f"{slug}: HTTP {e.code} {e.read()[:200]!r}")
             return
@@ -202,7 +241,7 @@ def sync_org(cfg, slug):
             with open(man_f) as f:
                 old = entries_map(json.load(f))
         except Exception as e:
-            warn(f"{slug}: zepsuty cache manifestu ({e}) — traktuję jako pusty")
+            warn(f"{slug}: zepsuty cache manifestu ({e}) — pusty")
     new = entries_map(manifest)
     traverse = "--x" if manifest.get("strictVisibility") else "r-x"
 
@@ -211,19 +250,22 @@ def sync_org(cfg, slug):
         if base is None:
             warn(f"{slug}: zły datasetRoot {root!r} (skip)")
             continue
+        empty = {"folders": {}, "files": {}}
+        n = new.get(root, empty)
+        o = old.get(root, empty)
         if not os.path.isdir(base):
-            if new.get(root):
+            if n["folders"] or n["files"]:
                 warn(f"{slug}: brak datasetu {base} (retry next)")
             continue
-        log(f"{slug}: reconcile {root} (new={len(new.get(root, {}))} "
-            f"old={len(old.get(root, {}))} traverse={traverse})")
-        apply_dataset(base, new.get(root, {}), old.get(root, {}), traverse)
+        log(f"{slug}: reconcile {root} (dirs {len(n['folders'])}/"
+            f"{len(o.get('folders', {}))} files {len(n['files'])}/"
+            f"{len(o.get('files', {}))} traverse={traverse})")
+        apply_dataset(base, n, o, traverse)
 
-    for sk in manifest.get("skippedFolders", []) or []:
-        log(f"{slug}: skippedFolder {sk}")
+    for sk in (manifest.get("skippedFolders") or []) + \
+              (manifest.get("skippedFiles") or []):
+        log(f"{slug}: skipped {sk}")
 
-    # zapis stanu: manifest zawsze (intencja), etag tylko przy zero błędów
-    # (missing-path/setfacl fail → następny run znów 200 → retry)
     with open(man_f + ".tmp", "w") as f:
         json.dump(manifest, f)
     os.replace(man_f + ".tmp", man_f)
@@ -238,8 +280,7 @@ def sync_org(cfg, slug):
 def main():
     os.makedirs(STATE_DIR, mode=0o700, exist_ok=True)
     cfg = load_conf()
-    slugs = [s for s in cfg["ORG_SLUGS"].replace(",", " ").split() if s]
-    for slug in slugs:
+    for slug in [s for s in cfg["ORG_SLUGS"].replace(",", " ").split() if s]:
         sync_org(cfg, slug)
     if failures:
         log(f"DONE z {failures} warn(ami)")

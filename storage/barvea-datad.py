@@ -25,7 +25,7 @@
 # Event: {seq, ts, op, path, path_to?, kind, size?, mtime?, actor, source,
 #         origin_request_id?}
 # ═══════════════════════════════════════════════════════════════
-import hashlib, hmac, json, os, pwd, re, shutil, sys, threading, time
+import base64, hashlib, hmac, json, os, pwd, re, shutil, sys, threading, time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -56,6 +56,13 @@ def load_cfg():
     if len(cfg.get("TOKEN", "")) < 24:
         log("FATAL: TOKEN brak/za krótki w " + CONF)
         sys.exit(1)
+    # SIGN_KEY: osobny sekret do HMAC tokenów /dl (endpoint publiczny —
+    # kompromitacja Bearer API ≠ możliwość podpisywania URL-i)
+    if len(cfg.get("SIGN_KEY", "")) < 24:
+        log("FATAL: SIGN_KEY brak/za krótki w " + CONF)
+        sys.exit(1)
+    cfg.setdefault("PUBLIC_DL_BASE", "https://barvea.com")
+    cfg.setdefault("DL_TTL", "900")
     return cfg
 
 
@@ -116,6 +123,34 @@ def sha256_file(path):
         for chunk in iter(lambda: f.read(CHUNK), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+# ── signed download tokens (self-contained: b64url(json).hmac_hex) ─
+def dl_sign(org_id, rel_path, ttl):
+    payload = json.dumps(
+        {"o": org_id, "p": rel_path, "e": int(time.time()) + ttl},
+        separators=(",", ":")).encode()
+    b64 = base64.urlsafe_b64encode(payload).decode().rstrip("=")
+    sig = hmac.new(CFG["SIGN_KEY"].encode(), b64.encode(),
+                   hashlib.sha256).hexdigest()
+    return f"{b64}.{sig}"
+
+
+def dl_verify(token):
+    """→ (org_id, rel_path) albo None (zły podpis/format/wygasły)."""
+    try:
+        b64, sig = token.split(".", 1)
+        want = hmac.new(CFG["SIGN_KEY"].encode(), b64.encode(),
+                        hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(sig, want):
+            return None
+        pad = "=" * (-len(b64) % 4)
+        d = json.loads(base64.urlsafe_b64decode(b64 + pad))
+        if int(d["e"]) < time.time():
+            return None
+        return d["o"], d["p"]
+    except Exception:
+        return None
 
 
 # ── journal ────────────────────────────────────────────────────
@@ -186,8 +221,10 @@ def op_skeleton(org_id, project_id, request_id):
         d = os.path.join(base, c)
         if not os.path.isdir(d):
             os.makedirs(d, exist_ok=True)
-            # WIP: grupa pisze (SGID dziedziczy grupę); reszta read-only
-            os.chmod(d, 0o2770 if c == "WIP" else 0o2750)
+            # SGID dziedziczy grupę (quota/księgowość), ale grupa BEZ bitów
+            # dostępu — wejście wyłącznie przez per-user ACL z manifestu
+            # (WIP-privacy: grupa=cała org byłaby backdoorem)
+            os.chmod(d, 0o2700)
             os.chown(d, 0, gid)
             created.append(c)
             journal_append(org_id, {
@@ -195,7 +232,7 @@ def op_skeleton(org_id, project_id, request_id):
                 "actor": None, "source": "api",
                 "origin_request_id": request_id})
     if created:
-        os.chmod(base, 0o2750)
+        os.chmod(base, 0o2700)
         os.chown(base, 0, gid)
     return (201 if created else 200), {"created": created}
 
@@ -231,7 +268,9 @@ def op_upload(handler, org_id, rel, request_id):
                 got += len(chunk)
             f.flush()
             os.fsync(f.fileno())
-        os.chmod(tmp, 0o660)
+        # 0600: plik prywatny by-default — czytelność nadaje wyłącznie
+        # per-user ACL z manifestu (files[] dla WIP)
+        os.chmod(tmp, 0o600)
         os.chown(tmp, 0, gid)
         os.replace(tmp, target)
     except Exception:
@@ -292,7 +331,7 @@ def op_promote(org_id, body):
                 pass
             raise
     if read_only:
-        os.chmod(dst, 0o440)
+        os.chmod(dst, 0o400)  # group bez r — dostęp per-user z ACL
     if chown_system:
         os.chown(dst, 0, gid)
     st = os.stat(dst)
@@ -375,6 +414,52 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         u = urllib.parse.urlparse(self.path)
         q = urllib.parse.parse_qs(u.query)
+        if u.path.startswith("/dl/"):
+            # PUBLICZNY (przez Caddy /dl/*) — auth = HMAC token z TTL
+            v = dl_verify(u.path[4:])
+            if v is None:
+                return self._send(403, {"error": "bad_or_expired_token"})
+            org, rel = v
+            target, _ = safe_join(org, rel) if ORG_ID_RE.match(org) \
+                else (None, None)
+            if target is None or not os.path.isfile(target):
+                return self._send(404, {"error": "not_found"})
+            try:
+                st = os.stat(target)
+                safe_name = re.sub(r"[^A-Za-z0-9._ -]", "_",
+                                   os.path.basename(target)) or "file"
+                self.send_response(200)
+                self.send_header("Content-Type", "application/octet-stream")
+                self.send_header("Content-Length", str(st.st_size))
+                self.send_header("Content-Disposition",
+                                 f'attachment; filename="{safe_name}"')
+                self.send_header("Cache-Control", "private, no-store")
+                self.end_headers()
+                with open(target, "rb") as f:
+                    shutil.copyfileobj(f, self.wfile, CHUNK)
+            except BrokenPipeError:
+                self.close_connection = True
+            except Exception as e:
+                log(f"ERROR dl stream: {e}")
+                self.close_connection = True
+            return
+        if u.path == "/signed-download":
+            if not self._authed():
+                return self._send(401, {"error": "unauthorized"})
+            org = q.get("org_id", [""])[0]
+            rel = q.get("path", [""])[0]
+            if not ORG_ID_RE.match(org):
+                return self._send(400, {"error": "bad_org_id"})
+            target, parts = safe_join(org, rel)
+            if target is None:
+                return self._send(400, {"error": "bad_path"})
+            if not os.path.isfile(target):
+                return self._send(404, {"error": "not_found"})
+            ttl = int(CFG["DL_TTL"])
+            tok = dl_sign(org, "/".join(parts), ttl)
+            return self._send(200, {
+                "url": f"{CFG['PUBLIC_DL_BASE']}/dl/{tok}",
+                "expires_at": int(time.time()) + ttl})
         if u.path == "/healthz":
             if not self._authed():
                 return self._send(401, {"error": "unauthorized"})
