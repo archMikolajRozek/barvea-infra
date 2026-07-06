@@ -347,6 +347,10 @@ class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     def _send(self, code, obj):
+        if code >= 400:
+            # ścieżki błędów mogły nie skonsumować request-body — zamknij
+            # połączenie, inaczej resztki kleją się z następnym requestem
+            self.close_connection = True
         body = json.dumps(obj).encode()
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
