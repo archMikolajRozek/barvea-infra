@@ -1,0 +1,16 @@
+[Unit]
+Description=BARVEA SMB user provisioning (receiver from app)
+After=network-online.target smbd.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/sbin/smb-provisiond.py
+Restart=on-failure
+RestartSec=3
+User=root
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
