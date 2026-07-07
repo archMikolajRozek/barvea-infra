@@ -126,9 +126,18 @@ def sha256_file(path):
 
 
 # ── signed download tokens (self-contained: b64url(json).hmac_hex) ─
-def dl_sign(org_id, rel_path, ttl):
+# Whitelist MIME dla inline (podgląd w przeglądarce). WSZYSTKO spoza
+# listy = attachment+octet-stream niezależnie od flagi — uploadowany
+# HTML/SVG nie może się wyrenderować na naszej domenie (XSS).
+INLINE_MIME = {".pdf": "application/pdf", ".png": "image/png",
+               ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+               ".webp": "image/webp", ".gif": "image/gif"}
+
+
+def dl_sign(org_id, rel_path, ttl, inline=False):
     payload = json.dumps(
-        {"o": org_id, "p": rel_path, "e": int(time.time()) + ttl},
+        {"o": org_id, "p": rel_path, "e": int(time.time()) + ttl,
+         "d": "i" if inline else "a"},
         separators=(",", ":")).encode()
     b64 = base64.urlsafe_b64encode(payload).decode().rstrip("=")
     sig = hmac.new(CFG["SIGN_KEY"].encode(), b64.encode(),
@@ -137,7 +146,7 @@ def dl_sign(org_id, rel_path, ttl):
 
 
 def dl_verify(token):
-    """→ (org_id, rel_path) albo None (zły podpis/format/wygasły)."""
+    """→ (org_id, rel_path, inline) albo None (zły podpis/format/wygasły)."""
     try:
         b64, sig = token.split(".", 1)
         want = hmac.new(CFG["SIGN_KEY"].encode(), b64.encode(),
@@ -148,7 +157,7 @@ def dl_verify(token):
         d = json.loads(base64.urlsafe_b64decode(b64 + pad))
         if int(d["e"]) < time.time():
             return None
-        return d["o"], d["p"]
+        return d["o"], d["p"], d.get("d") == "i"
     except Exception:
         return None
 
@@ -352,6 +361,27 @@ def op_promote(org_id, body):
                  "mtime": int(st.st_mtime)}
 
 
+def op_lock(org_id, body):
+    """In-place lock (migracja/adhoc): 0400 + chown root — bez kopii."""
+    gid = org_gid(org_id)
+    if gid is None:
+        return 404, {"error": "org_not_provisioned"}
+    target, parts = safe_join(org_id, body.get("path", ""))
+    if target is None:
+        return 400, {"error": "bad_path"}
+    if not os.path.isfile(target):
+        return 404, {"error": "not_found"}
+    already = is_locked(target)
+    sha = sha256_file(target)
+    if not already:
+        os.chmod(target, 0o400)
+        os.chown(target, 0, gid)
+        log(f"lock: {'/'.join(parts)}")
+    st = os.stat(target)
+    return 200, {"locked": True, "already": already, "sha256": sha,
+                 "size": st.st_size, "mtime": int(st.st_mtime)}
+
+
 def op_fs_tree(org_id, project, want_hash):
     base = os.path.join(ORG_BASE, org_id)
     if not os.path.isdir(base):
@@ -419,7 +449,7 @@ class Handler(BaseHTTPRequestHandler):
             v = dl_verify(u.path[4:])
             if v is None:
                 return self._send(403, {"error": "bad_or_expired_token"})
-            org, rel = v
+            org, rel, inline = v
             target, _ = safe_join(org, rel) if ORG_ID_RE.match(org) \
                 else (None, None)
             if target is None or not os.path.isfile(target):
@@ -428,11 +458,16 @@ class Handler(BaseHTTPRequestHandler):
                 st = os.stat(target)
                 safe_name = re.sub(r"[^A-Za-z0-9._ -]", "_",
                                    os.path.basename(target)) or "file"
+                ext = os.path.splitext(target)[1].lower()
+                if inline and ext in INLINE_MIME:
+                    ctype, disp = INLINE_MIME[ext], "inline"
+                else:
+                    ctype, disp = "application/octet-stream", "attachment"
                 self.send_response(200)
-                self.send_header("Content-Type", "application/octet-stream")
+                self.send_header("Content-Type", ctype)
                 self.send_header("Content-Length", str(st.st_size))
                 self.send_header("Content-Disposition",
-                                 f'attachment; filename="{safe_name}"')
+                                 f'{disp}; filename="{safe_name}"')
                 self.send_header("Cache-Control", "private, no-store")
                 self.end_headers()
                 with open(target, "rb") as f:
@@ -455,8 +490,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(400, {"error": "bad_path"})
             if not os.path.isfile(target):
                 return self._send(404, {"error": "not_found"})
+            disp = q.get("disposition", ["attachment"])[0]
+            if disp not in ("attachment", "inline"):
+                return self._send(400, {"error": "bad_disposition"})
             ttl = int(CFG["DL_TTL"])
-            tok = dl_sign(org, "/".join(parts), ttl)
+            tok = dl_sign(org, "/".join(parts), ttl, inline=(disp == "inline"))
             return self._send(200, {
                 "url": f"{CFG['PUBLIC_DL_BASE']}/dl/{tok}",
                 "expires_at": int(time.time()) + ttl})
@@ -531,6 +569,14 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(400, {"error": "bad_org_id"})
                 with LOCK:
                     code, resp = op_promote(org, b)
+                return self._send(code, resp)
+            if u.path == "/cde/lock":
+                b = self._json_body()
+                org = b.get("org_id", "")
+                if not ORG_ID_RE.match(org):
+                    return self._send(400, {"error": "bad_org_id"})
+                with LOCK:
+                    code, resp = op_lock(org, b)
                 return self._send(code, resp)
             return self._send(404, {"error": "not_found"})
         except json.JSONDecodeError:
