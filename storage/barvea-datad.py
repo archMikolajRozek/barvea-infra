@@ -420,6 +420,9 @@ class Handler(BaseHTTPRequestHandler):
             # ścieżki błędów mogły nie skonsumować request-body — zamknij
             # połączenie, inaczej resztki kleją się z następnym requestem
             self.close_connection = True
+            # loguj KAŻDĄ odmowę — ślepe 4xx kosztowały już dwie diagnozy
+            log(f"deny {code} {self.command} {self.path[:120]} :: "
+                f"{obj.get('error', '')}")
         body = json.dumps(obj).encode()
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
