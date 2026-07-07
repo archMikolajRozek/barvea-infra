@@ -23,7 +23,7 @@
 #   APP_URL=https://app.barvea.internal, CA_FILE=/etc/barvea/root-ca.crt)
 # State:  /var/lib/barvea-acl/<slug>.{etag,manifest.json}
 # ═══════════════════════════════════════════════════════════════
-import json, os, ssl, subprocess, sys, time, urllib.request, urllib.error
+import grp, json, os, ssl, subprocess, sys, time, urllib.request, urllib.error
 
 CONF = "/etc/barvea/acl-sync.env"
 STATE_DIR = "/var/lib/barvea-acl"
@@ -158,8 +158,24 @@ def apply_dataset(base, new_m, old_m, traverse):
         log(f"  strip-file u:{user} {'/'.join(parts)}")
 
     # ── apply: foldery ──
+    org_id = os.path.relpath(base, ORG_BASE).split(os.sep)[0]
+    try:
+        gid = grp.getgrnam(f"org-{org_id}").gr_gid
+    except KeyError:
+        gid = None
     for (parts, user), lvl in nf.items():
         target = os.path.join(base, *parts)
+        # manifest = źródło prawdy struktury: folder z web-UI/backfill może
+        # jeszcze nie istnieć na FS — tworzymy (02700 root:gid, dostęp
+        # wyłącznie przez ACL które zaraz nałożymy)
+        if not os.path.isdir(target) and gid is not None:
+            try:
+                os.makedirs(target, exist_ok=True)
+                os.chmod(target, 0o2700)
+                os.chown(target, 0, gid)
+                log(f"  mkdir-from-manifest {'/'.join(parts)}")
+            except OSError as e:
+                warn(f"mkdir {target}: {e}")
         for d in ancestors_of(base, parts):
             if os.path.isdir(d):
                 setfacl(["-m", f"u:{user}:{traverse}", d])
