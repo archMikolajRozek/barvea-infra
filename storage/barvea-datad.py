@@ -642,7 +642,7 @@ def audit_handle(line):
             audit_emit(vs[0], {"op": "move", "path": vs[1],
                                "path_to": vd[1], "kind": "file",
                                "actor": user, "source": "smb"})
-    elif op in ("pwrite", "write"):
+    elif op in ("pwrite", "write", "pwrite_send"):
         v = audit_rel(fields[0])
         if not v:
             return
