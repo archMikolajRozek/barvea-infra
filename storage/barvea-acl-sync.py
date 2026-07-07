@@ -157,17 +157,16 @@ def apply_dataset(base, new_m, old_m, traverse):
             setfacl(["-x", f"u:{user}", target])
         log(f"  strip-file u:{user} {'/'.join(parts)}")
 
-    # ── apply: foldery ──
+    # ── apply (plan-then-apply): traverse NIGDY nie nadpisuje grantu ──
     org_id = os.path.relpath(base, ORG_BASE).split(os.sep)[0]
     try:
         gid = grp.getgrnam(f"org-{org_id}").gr_gid
     except KeyError:
         gid = None
+    # 0. mkdir-from-manifest: manifest = źródło prawdy struktury (foldery
+    #    z web-UI/backfill mogą nie istnieć na FS) — 02700 root:gid
     for (parts, user), lvl in nf.items():
         target = os.path.join(base, *parts)
-        # manifest = źródło prawdy struktury: folder z web-UI/backfill może
-        # jeszcze nie istnieć na FS — tworzymy (02700 root:gid, dostęp
-        # wyłącznie przez ACL które zaraz nałożymy)
         if not os.path.isdir(target) and gid is not None:
             try:
                 os.makedirs(target, exist_ok=True)
@@ -176,25 +175,32 @@ def apply_dataset(base, new_m, old_m, traverse):
                 log(f"  mkdir-from-manifest {'/'.join(parts)}")
             except OSError as e:
                 warn(f"mkdir {target}: {e}")
+    # 1. plan: najpierw traverse na ancestory (foldery+pliki), potem
+    #    granty targetów NADPISUJĄ (są zawsze >= traverse)
+    dir_want = {}
+    for (parts, user) in list(nf) + list(nfi):
         for d in ancestors_of(base, parts):
-            if os.path.isdir(d):
-                setfacl(["-m", f"u:{user}:{traverse}", d])
+            dir_want.setdefault((d, user), traverse)
+    recursive = []
+    for (parts, user), lvl in nf.items():
+        target = os.path.join(base, *parts)
         if not os.path.isdir(target):
             warn(f"brak katalogu {target} (retry przy następnym pullu)")
             continue
-        if parts[0] == "WIP":
-            # TYLKO katalog: wejście/listing/tworzenie. ZERO -R, ZERO -d —
-            # pliki WIP dostają ACL wyłącznie z files[] (privacy per plik).
-            setfacl(["-m", f"u:{user}:{DIR_PERMS[lvl]}", target])
-        else:
-            setfacl(["-R", "-m", f"u:{user}:{DIR_PERMS[lvl]}", target])
-            setfacl(["-R", "-d", "-m", f"u:{user}:{DIR_PERMS[lvl]}", target])
-    # ── apply: pliki WIP (wyłącznie files[]) ──
+        dir_want[(target, user)] = DIR_PERMS[lvl]
+        if parts[0] != "WIP":
+            recursive.append((target, user, DIR_PERMS[lvl]))
+    # 2. aplikacja katalogów (WIP = tylko katalog, zero -R/-d — pliki WIP
+    #    wyłącznie z files[]; privacy per plik)
+    for (d, user), perms in dir_want.items():
+        if os.path.isdir(d):
+            setfacl(["-m", f"u:{user}:{perms}", d])
+    for (target, user, perms) in recursive:
+        setfacl(["-R", "-m", f"u:{user}:{perms}", target])
+        setfacl(["-R", "-d", "-m", f"u:{user}:{perms}", target])
+    # 3. pliki WIP (wyłącznie files[])
     for (parts, user), lvl in nfi.items():
         target = os.path.join(base, *parts)
-        for d in ancestors_of(base, parts):
-            if os.path.isdir(d):
-                setfacl(["-m", f"u:{user}:{traverse}", d])
         if not os.path.isfile(target):
             warn(f"brak pliku {target} (retry przy następnym pullu)")
             continue
