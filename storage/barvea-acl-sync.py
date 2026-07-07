@@ -265,7 +265,12 @@ def sync_org(cfg, slug):
         except Exception as e:
             warn(f"{slug}: zepsuty cache manifestu ({e}) — pusty")
     new = entries_map(manifest)
-    traverse = "--x" if manifest.get("strictVisibility") else "r-x"
+    # traverse ZAWSZE r-x: prywatność na SMB gwarantuje hide-unreadable
+    # (Samba filtruje z listingu wpisy bez prawa odczytu) + brak entries;
+    # --x nie dodawał ochrony, a łamał nawigację Explorera (POSIX: named
+    # entry ma pierwszeństwo przed group, mask tnie do --x → brak listingu).
+    # strictVisibility w manifeście = informacyjne (steruje treścią entries).
+    traverse = "r-x"
 
     for root in set(old) | set(new):
         base = dataset_base(root)
