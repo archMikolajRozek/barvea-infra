@@ -589,10 +589,102 @@ class Handler(BaseHTTPRequestHandler):
                                     "detail": str(e)[:200]})
 
 
+# ── Samba full_audit → journal (source:"smb", actor z prefixu) ─────
+# journald tag smbd_audit, -o cat: "u_xxx|10.67.0.4|mkdirat|ok|/srv/…"
+# Wymaga w smb.conf: full_audit:success = mkdirat renameat unlinkat
+# pwrite write (mutacje; bez open/close/read = bez spamu).
+AUDIT_LINE_RE = re.compile(
+    r"^(?P<user>u_[a-z0-9]+)\|(?P<ip>[0-9a-fA-F.:]+)\|"
+    r"(?P<op>[a-z_]+)\|ok\|(?P<rest>.*)$")
+MODIFY_COALESCE = 30  # s — max 1 event modify per plik w oknie
+_last_modify = {}
+
+
+def audit_rel(abs_path):
+    """'/srv/orgs/<org>/<proj>/<Cont>/…' → (org_id, '<proj>/<Cont>/…')."""
+    if not abs_path.startswith(ORG_BASE + "/"):
+        return None
+    parts = [x for x in abs_path[len(ORG_BASE) + 1:].split("/")
+             if x and x != "."]
+    if len(parts) < 3 or not ORG_ID_RE.match(parts[0]) \
+            or parts[2] not in CONTAINERS:
+        return None
+    return parts[0], "/".join(parts[1:])
+
+
+def audit_emit(org, ev):
+    with LOCK:
+        journal_append(org, ev)
+
+
+def audit_handle(line):
+    m = AUDIT_LINE_RE.match(line.strip())
+    if not m:
+        return
+    user, op, rest = m.group("user"), m.group("op"), m.group("rest")
+    fields = rest.split("|")
+    if op == "mkdirat":
+        v = audit_rel(fields[0])
+        if v:
+            audit_emit(v[0], {"op": "mkdir", "path": v[1], "kind": "dir",
+                              "actor": user, "source": "smb"})
+    elif op == "unlinkat":
+        v = audit_rel(fields[0])
+        if v:
+            audit_emit(v[0], {"op": "unlink", "path": v[1], "kind": "file",
+                              "actor": user, "source": "smb"})
+    elif op == "renameat" and len(fields) >= 2:
+        vs, vd = audit_rel(fields[0]), audit_rel(fields[1])
+        if vs and vd and vs[0] == vd[0]:
+            audit_emit(vs[0], {"op": "move", "path": vs[1],
+                               "path_to": vd[1], "kind": "file",
+                               "actor": user, "source": "smb"})
+    elif op in ("pwrite", "write"):
+        v = audit_rel(fields[0])
+        if not v:
+            return
+        key = (v[0], v[1])
+        now = time.time()
+        if now - _last_modify.get(key, 0) < MODIFY_COALESCE:
+            return
+        _last_modify[key] = now
+        abs_p = os.path.join(ORG_BASE, v[0], *v[1].split("/"))
+        try:
+            st = os.stat(abs_p)
+            size, mtime = st.st_size, int(st.st_mtime)
+        except OSError:
+            size, mtime = None, None
+        audit_emit(v[0], {"op": "modify", "path": v[1], "kind": "file",
+                          "size": size, "mtime": mtime,
+                          "actor": user, "source": "smb"})
+
+
+def audit_thread():
+    import subprocess
+    cursor = os.path.join(STATE, "audit.cursor")
+    while True:
+        try:
+            proc = subprocess.Popen(
+                ["journalctl", "-t", "smbd_audit", "-f", "-o", "cat",
+                 "--cursor-file", cursor],
+                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+            log("audit: tailing journald (smbd_audit)")
+            for line in proc.stdout:
+                try:
+                    audit_handle(line)
+                except Exception as e:
+                    log(f"WARN audit line: {e}")
+        except Exception as e:
+            log(f"WARN audit thread: {e}")
+        time.sleep(3)  # respawn po padzie journalctl
+
+
 def main():
     global CFG
     CFG = load_cfg()
     os.makedirs(STATE, mode=0o700, exist_ok=True)
+    if CFG.get("AUDIT", "1") != "0":
+        threading.Thread(target=audit_thread, daemon=True).start()
     addr = (CFG["BIND"], int(CFG["PORT"]))
     log(f"barvea-datad start {addr[0]}:{addr[1]}")
     ThreadingHTTPServer(addr, Handler).serve_forever()
