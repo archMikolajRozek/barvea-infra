@@ -1,0 +1,48 @@
+# BARVEA Samba baseline — [global] section (IaC template)
+# Zrekonstruowany z testparm 2026-07-08 + edity sesji. ⚠️ Przy budowie
+# appliance ZWERYFIKUJ diff z żywym /etc/samba/smb.conf na LXC 201.
+# Per-org share'y NIE tutaj — dodaje je provision-org.sh przez:
+#   include = /etc/samba/per-org/<org_slug>.conf   (append + smbcontrol reload)
+# Standalone (tdbsam), SMB3 only, encrypt required per-share (w per-org conf).
+
+[global]
+   workgroup = BARVEA
+   server string = BARVEA Storage
+   security = USER
+   server min protocol = SMB3
+
+   # drukarki off
+   disable spoolss = Yes
+   load printers = No
+   printcap name = /dev/null
+
+   # idmap
+   idmap config * : backend = tdb
+
+   # POSIX ACL dziedziczenie — KRYTYCZNE: bez tego nowy plik SMB nie
+   # dziedziczy default-ACL folderu (WIP folder-inheritance) (2026-07-08)
+   inherit acls = yes
+
+   # vfs stack: full_audit (journal) + shadow_copy2 (Previous Versions z
+   # sanoid). UWAGA: catia+fruit USUNIĘTE — robiły TMPNAME-dance przy mkdir
+   # (rename „Item Not Found") + śmieciły journal; Windows ich nie potrzebuje.
+   vfs objects = full_audit shadow_copy2
+
+   # full_audit → journald tag smbd_audit (LOCAL5/NOTICE) → barvea-datad parser.
+   # ops = MUTACJE (mkdirat renameat unlinkat pwrite pwrite_send write).
+   # UWAGA: 'write_send' NIE ISTNIEJE jako op — dodanie = "Invalid success
+   # operations list" = KAŻDY tree-connect pada (Win32 31). Nie dodawać.
+   full_audit:success = mkdirat renameat unlinkat pwrite pwrite_send write
+   full_audit:failure = none
+   full_audit:priority = NOTICE
+   full_audit:facility = LOCAL5
+
+   # shadow_copy2 — sanoid snapshoty (.zfs/snapshot) jako Previous Versions
+   shadow:snapdir = .zfs/snapshot
+   shadow:sort = desc
+   shadow:snapprefix = ^autosnap
+   shadow:format = autosnap_%Y-%m-%d_%H:%M:%S_hourly
+
+# ⚠️ Po każdej zmianie vfs/full_audit: PEŁNY `systemctl restart smbd`
+# (nie `smbcontrol reload-config` — full_audit traci stan vfs_handle na
+# żywych sesjach: "do_log failed to get vfs_handle->data") + reconnect klientów.

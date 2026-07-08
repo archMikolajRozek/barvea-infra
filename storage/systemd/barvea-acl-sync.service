@@ -1,0 +1,7 @@
+[Unit]
+Description=BARVEA Drive ACL sync (manifest -> POSIX ACLs)
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/sbin/barvea-acl-sync.py
