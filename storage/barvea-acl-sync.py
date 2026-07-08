@@ -82,9 +82,18 @@ def rel_parts(path):
     return parts
 
 
-def dataset_base(dataset_root):
+def dataset_base(org_id, dataset_root):
+    # datasetRoot = project-relative (driveFolderName, może mieć spacje);
+    # org_id z top-level manifestu (org = dataset/mount, nie segment path).
+    # Legacy fallback: gdy datasetRoot już niesie org-prefix (<org>/<cuid>).
+    if not org_id or not valid_component(org_id):
+        return None
     parts = rel_parts(dataset_root)
-    return os.path.join(ORG_BASE, *parts) if parts else None
+    if parts is None:
+        return None
+    if parts and parts[0] == org_id:      # legacy <org>/<cuid>
+        return os.path.join(ORG_BASE, *parts)
+    return os.path.join(ORG_BASE, org_id, *parts)
 
 
 def entries_map(manifest):
@@ -265,6 +274,7 @@ def sync_org(cfg, slug):
         except Exception as e:
             warn(f"{slug}: zepsuty cache manifestu ({e}) — pusty")
     new = entries_map(manifest)
+    manifest_org_id = manifest.get("orgId") or manifest.get("org_id")
     # traverse ZAWSZE r-x: prywatność na SMB gwarantuje hide-unreadable
     # (Samba filtruje z listingu wpisy bez prawa odczytu) + brak entries;
     # --x nie dodawał ochrony, a łamał nawigację Explorera (POSIX: named
@@ -273,9 +283,10 @@ def sync_org(cfg, slug):
     traverse = "r-x"
 
     for root in set(old) | set(new):
-        base = dataset_base(root)
+        base = dataset_base(manifest_org_id, root)
         if base is None:
-            warn(f"{slug}: zły datasetRoot {root!r} (skip)")
+            warn(f"{slug}: zły datasetRoot {root!r} / orgId "
+                 f"{manifest_org_id!r} (skip)")
             continue
         empty = {"folders": {}, "files": {}}
         n = new.get(root, empty)
