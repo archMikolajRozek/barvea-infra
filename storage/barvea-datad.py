@@ -382,6 +382,74 @@ def op_lock(org_id, body):
                  "size": st.st_size, "mtime": int(st.st_mtime)}
 
 
+def rename_parts(org_id, rel):
+    """Walidacja ścieżki dla /fs/rename: projekt (1 segment) ALBO
+    folder/plik wewnątrz kontenera (>=3 segmenty, [1] in CONTAINERS).
+    Sam kontener (2 segmenty) NIETYKALNY. → (abs, parts) | (None, None)."""
+    parts = [p for p in rel.replace("\\", "/").split("/") if p]
+    if not parts or not all(valid_component(p) for p in parts):
+        return None, None
+    for p in parts:
+        if p != p.rstrip(". "):  # Windows: trailing dot/space
+            return None, None
+    if len(parts) == 1:
+        pass  # rename katalogu projektu
+    elif len(parts) >= 3 and parts[1] in CONTAINERS:
+        pass  # folder/plik wewnątrz kontenera
+    else:
+        return None, None
+    return os.path.join(ORG_BASE, org_id, *parts), parts
+
+
+def smb_open_handles_under(abs_path):
+    """True gdy smbstatus pokazuje otwarte pliki w poddrzewie (chroni
+    żywe sesje Revit przed rename). Fail-open przy błędzie smbstatus."""
+    import subprocess
+    try:
+        r = subprocess.run(["smbstatus", "-L"], capture_output=True,
+                           text=True, timeout=10)
+        needle = os.path.normpath(abs_path)
+        for line in r.stdout.splitlines():
+            if needle in line or (ORG_BASE in line and needle.split(
+                    ORG_BASE + "/", 1)[-1] in line):
+                return True
+    except Exception as e:
+        log(f"WARN smbstatus check: {e}")
+    return False
+
+
+def op_rename(org_id, body):
+    gid = org_gid(org_id)
+    if gid is None:
+        return 404, {"error": "org_not_provisioned"}
+    src, sp = rename_parts(org_id, body.get("path", ""))
+    dst, dp = rename_parts(org_id, body.get("path_to", ""))
+    if src is None or dst is None:
+        return 400, {"error": "bad_path",
+                     "detail": "projekt (1 segment) albo element wewnątrz "
+                               "kontenera; kontenery nietykalne"}
+    if (len(sp) == 1) != (len(dp) == 1):
+        return 400, {"error": "bad_path",
+                     "detail": "projekt tylko na projekt"}
+    if not os.path.exists(src):
+        return 404, {"error": "src_not_found"}
+    if os.path.exists(dst):
+        return 409, {"error": "dst_exists"}
+    if os.path.isdir(src) and smb_open_handles_under(src):
+        return 423, {"error": "open_handles",
+                     "detail": "otwarte pliki SMB w poddrzewie — zamknij "
+                               "sesje (Revit) i ponów"}
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    kind = "dir" if os.path.isdir(src) else "file"
+    os.replace(src, dst)
+    journal_append(org_id, {
+        "op": "move", "path": "/".join(sp), "path_to": "/".join(dp),
+        "kind": kind, "actor": None, "source": "api",
+        "origin_request_id": body.get("request_id")})
+    log(f"fs-rename {kind}: {'/'.join(sp)} -> {'/'.join(dp)}")
+    return 200, {"applied": True, "kind": kind}
+
+
 def op_fs_tree(org_id, project, want_hash):
     base = os.path.join(ORG_BASE, org_id)
     if not os.path.isdir(base):
@@ -443,6 +511,31 @@ class Handler(BaseHTTPRequestHandler):
         if n > limit:
             raise ValueError("too_large")
         return json.loads(self.rfile.read(n))
+
+    def do_HEAD(self):
+        u = urllib.parse.urlparse(self.path)
+        self.close_connection = True
+        if not u.path.startswith("/dl/"):
+            self.send_response(404)
+            self.end_headers()
+            return
+        v = dl_verify(u.path[4:])
+        target = None
+        if v is not None and ORG_ID_RE.match(v[0]):
+            target, _ = safe_join(v[0], v[1])
+        if v is None or target is None or not os.path.isfile(target):
+            self.send_response(403 if v is None else 404)
+            self.end_headers()
+            return
+        st = os.stat(target)
+        ext = os.path.splitext(target)[1].lower()
+        inline = v[2] and ext in INLINE_MIME
+        self.send_response(200)
+        self.send_header("Content-Type",
+                         INLINE_MIME[ext] if inline
+                         else "application/octet-stream")
+        self.send_header("Content-Length", str(st.st_size))
+        self.end_headers()
 
     def do_GET(self):
         u = urllib.parse.urlparse(self.path)
@@ -580,6 +673,14 @@ class Handler(BaseHTTPRequestHandler):
                     return self._send(400, {"error": "bad_org_id"})
                 with LOCK:
                     code, resp = op_lock(org, b)
+                return self._send(code, resp)
+            if u.path == "/fs/rename":
+                b = self._json_body()
+                org = b.get("org_id", "")
+                if not ORG_ID_RE.match(org):
+                    return self._send(400, {"error": "bad_org_id"})
+                with LOCK:
+                    code, resp = op_rename(org, b)
                 return self._send(code, resp)
             return self._send(404, {"error": "not_found"})
         except json.JSONDecodeError:
