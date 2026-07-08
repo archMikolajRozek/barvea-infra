@@ -149,15 +149,12 @@ def apply_dataset(base, new_m, old_m, traverse):
     of = old_m.get("folders", {})
     ofi = old_m.get("files", {})
 
-    # ── strip: foldery ──
+    # ── strip: foldery (recursive dla wszystkich — grant też recursive) ──
     for (parts, user) in set(of) - set(nf):
         target = os.path.join(base, *parts)
         if os.path.isdir(target):
-            if parts[0] == "WIP":
-                setfacl(["-x", f"u:{user}", target])
-            else:
-                setfacl(["-R", "-x", f"u:{user}", target])
-                setfacl(["-R", "-d", "-x", f"u:{user}", target])
+            setfacl(["-R", "-x", f"u:{user}", target])
+            setfacl(["-R", "-d", "-x", f"u:{user}", target])
         log(f"  strip-folder u:{user} {'/'.join(parts)}")
     # ── strip: pliki WIP ──
     for (parts, user) in set(ofi) - set(nfi):
@@ -197,10 +194,13 @@ def apply_dataset(base, new_m, old_m, traverse):
             warn(f"brak katalogu {target} (retry przy następnym pullu)")
             continue
         dir_want[(target, user)] = DIR_PERMS[lvl]
-        if parts[0] != "WIP":
-            recursive.append((target, user, DIR_PERMS[lvl]))
-    # 2. aplikacja katalogów (WIP = tylko katalog, zero -R/-d — pliki WIP
-    #    wyłącznie z files[]; privacy per plik)
+        # DZIEDZICZENIE Z FOLDERU (wszystkie kontenery, WIP też): członek
+        # folderu widzi jego zawartość + nowe pliki dziedziczą (default ACL).
+        # Model intuicyjny jak NAS. Prywatność per-folder = przyszły wariant
+        # (strip default). files[] zostaje na override/wyjątki per-plik.
+        recursive.append((target, user, DIR_PERMS[lvl]))
+    # 2. aplikacja: traverse na ancestorach (dir_want) + recursive grant +
+    #    default ACL (dziedziczenie nowych plików) na każdym folderze-target
     for (d, user), perms in dir_want.items():
         if os.path.isdir(d):
             setfacl(["-m", f"u:{user}:{perms}", d])
