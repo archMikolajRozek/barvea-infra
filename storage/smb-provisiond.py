@@ -80,6 +80,17 @@ def org_group(org_id):
     return f"org-{org_id}"
 
 
+def user_groups(username):
+    """Wszystkie grupy usera (primary + supplementary), po nazwie."""
+    r = run(["id", "-nG", username])
+    return r.stdout.split() if r.returncode == 0 else []
+
+
+def user_org_groups(username):
+    """Tylko grupy org-* (do których org user ma dostęp SMB)."""
+    return [g for g in user_groups(username) if g.startswith("org-")]
+
+
 def group_gid(group):
     r = run(["getent", "group", group])
     if r.returncode != 0:
@@ -125,14 +136,22 @@ def provision_user(org_id, username, rotate):
                      "detail": f"brak {grp} lub /srv/orgs/{org_id} — "
                                "najpierw provision-org.sh"}
     if getent("passwd", username):
-        # user istnieje — guard: musi być w TEJ grupie org
-        if user_gid(username) != gid:
-            return 409, {"error": "user_in_other_org"}
+        # MULTI-ORG: jeden POSIX user (u_<last10(userId)>) może należeć do
+        # WIELU org. Primary gid = 1. org; kolejne org = supplementary group
+        # (usermod -aG). Ten sam user+hasło montuje dowolny share org do
+        # której należy (valid users=@org-<id>). NIE 409 (stary single-org).
         uid = user_uid(username)
+        if grp not in user_groups(username):
+            r = run(["usermod", "-aG", grp, username])
+            if r.returncode != 0:
+                raise RuntimeError(
+                    f"usermod -aG failed: {r.stderr.strip()[:200]}")
+            log(f"multi-org: {username} +group {grp} "
+                f"(orgs: {len(user_org_groups(username))})")
         if rotate:
             pw = gen_password()
             smbpasswd_set(username, pw)
-            log(f"rotate: {username} (org {org_id[:10]}…)")
+            log(f"rotate: {username}")
             return 200, {"created": False, "uid": uid, "gid": gid,
                          "password": pw}
         return 200, {"created": False, "uid": uid, "gid": gid,
@@ -149,19 +168,34 @@ def provision_user(org_id, username, rotate):
 
 
 def deprovision_user(org_id, username):
+    """MULTI-ORG offboard: usuń usera z grupy TEJ org. Userdel TYLKO gdy to
+    była jego ostatnia org (żeby nie odciąć dostępu do innych org)."""
     grp = org_group(org_id)
     gid = group_gid(grp)
     if gid is None:
         return 404, {"error": "org_not_provisioned"}
     if not getent("passwd", username):
         return 404, {"error": "user_not_found"}
-    if user_gid(username) != gid:
-        return 409, {"error": "user_in_other_org"}
+    if grp not in user_org_groups(username):
+        return 404, {"error": "user_not_in_org"}
+    remaining = [g for g in user_org_groups(username) if g != grp]
+    if remaining:
+        # user ma jeszcze inne org — zdejmij tylko członkostwo w tej grupie
+        r = run(["gpasswd", "-d", username, grp])
+        if r.returncode != 0 and user_gid(username) == gid:
+            # to była jego PRIMARY grupa — przełącz primary na inną org
+            run(["usermod", "-g", remaining[0], username])
+            run(["gpasswd", "-d", username, grp])
+        log(f"multi-org: {username} -group {grp} "
+            f"({len(remaining)} org(s) left)")
+        return 200, {"applied": True, "action": "removed_from_org",
+                     "orgs_left": len(remaining)}
+    # ostatnia org — pełny userdel + smb wipe
     run(["smbpasswd", "-x", username])
     r = run(["userdel", username])
     if r.returncode != 0:
         raise RuntimeError(f"userdel failed: {r.stderr.strip()[:200]}")
-    log(f"deleted: {username} (org {org_id[:10]}…)")
+    log(f"deleted: {username} (last org {org_id[:10]}…)")
     return 200, {"applied": True, "action": "deleted"}
 
 
