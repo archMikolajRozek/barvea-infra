@@ -99,6 +99,85 @@ def set_hidden(target, on):
     return None
 
 
+# ── VETO FILES (śmieci Win/mac + malware .exe) — web-konfigurowalny per-org.
+# Kontrakt z APP: manifest top-level `shareConfig.vetoFiles={enabled,categories}`.
+# Brak pola = OFF (zero footprintu). Applier pisze per-org veto include +
+# reload smbd (veto NIE vfs → reload-config OK, bez restartu/zrywania sesji).
+PER_ORG_DIR = "/etc/samba/per-org"
+VETO_CATEGORY = {
+    "windows": ["Thumbs.db", "Thumbs.db:encryptable", "ehthumbs.db",
+                "desktop.ini", "$RECYCLE.BIN"],
+    "macos": [".DS_Store", "._*", ".Spotlight-V100", ".Trashes",
+              ".fseventsd", ".TemporaryItems"],
+    "office": ["~$*", ".~lock.*"],
+    "executables": ["*.exe", "*.scr", "*.bat", "*.cmd", "*.com", "*.pif",
+                    "*.vbs", "*.js", "*.jse", "*.wsf", "*.msi", "*.jar",
+                    "*.ps1", "*.lnk"],
+}
+VETO_ORDER = ["windows", "macos", "office", "executables"]
+
+
+def ensure_veto_include(share_conf, veto_file):
+    """Dopisz `include = <veto_file>` do per-org share conf (raz, idempotent).
+    Defensywnie: tylko gdy conf istnieje + ma sekcję [..] + include nieobecny."""
+    inc = f"include = {veto_file}"
+    try:
+        cur = open(share_conf).read()
+    except FileNotFoundError:
+        warn(f"veto: brak share conf {share_conf} — pomijam")
+        return False
+    if inc in cur:
+        return True
+    if "[" not in cur:
+        warn(f"veto: {share_conf} bez sekcji [..] — pomijam include")
+        return False
+    with open(share_conf, "a") as f:
+        f.write(f"\n   {inc}\n")
+    log(f"veto: +include {os.path.basename(share_conf)}")
+    return True
+
+
+def apply_veto(slug, manifest):
+    """shareConfig.vetoFiles → per-org veto include + reload smbd. Brak pola =
+    OFF, NIE tykamy share conf. Idempotent: reload TYLKO gdy veto-file zmieniony.
+    testparm-guard przed reload (zły config → NIE reload, live nietknięty)."""
+    sc = (manifest.get("shareConfig") or {}).get("vetoFiles")
+    if sc is None:
+        return                        # pole absent = OFF, zero footprintu
+    veto_file = os.path.join(PER_ORG_DIR, f"{slug}.veto.conf")
+    share_conf = os.path.join(PER_ORG_DIR, f"{slug}.conf")
+    enabled = bool(sc.get("enabled"))
+    cats = [c for c in VETO_ORDER if c in (sc.get("categories") or [])]
+    if enabled and cats:
+        pats = [p for c in cats for p in VETO_CATEGORY[c]]
+        veto = "/" + "/".join(pats) + "/"
+        desired = ("# BARVEA veto — zarządzane przez acl-sync, NIE edytuj\n"
+                   f"   veto files = {veto}\n"
+                   "   delete veto files = yes\n")
+    else:
+        desired = "# BARVEA veto: OFF (disabled / brak kategorii)\n"
+    try:
+        cur = open(veto_file).read()
+    except FileNotFoundError:
+        cur = None
+    if cur == desired:
+        return                        # bez zmian = bez reload (idempotent)
+    with open(veto_file + ".tmp", "w") as f:
+        f.write(desired)
+    os.replace(veto_file + ".tmp", veto_file)   # target istnieje przed include
+    if not ensure_veto_include(share_conf, veto_file):
+        return
+    tp = subprocess.run(["testparm", "-s"], capture_output=True, text=True)
+    if tp.returncode != 0:
+        warn(f"veto: testparm FAIL {slug} — NIE reload, live nietknięty "
+             f"({tp.stderr.strip()[:150]})")
+        return
+    subprocess.run(["smbcontrol", "smbd", "reload-config"],
+                   capture_output=True)
+    state = "ON " + ",".join(cats) if (enabled and cats) else "OFF"
+    log(f"{slug}: veto {state} → smbd reload")
+
+
 def valid_component(c):
     return bool(c) and c not in (".", "..") and "/" not in c and "\\" not in c \
         and "\x00" not in c and not any(ord(ch) < 32 for ch in c)
@@ -175,10 +254,11 @@ def ancestors_of(base, parts):
     return out
 
 
-def apply_dataset(base, new_m, old_m, traverse):
+def apply_dataset(base, new_m, old_m, traverse, allow_rmdir=True):
     nf, nfi = new_m["folders"], new_m["files"]
     of = old_m.get("folders", {})
     ofi = old_m.get("files", {})
+    nf_dirs = {p for (p, _) in nf}
 
     # ── strip: foldery (recursive dla wszystkich — grant też recursive) ──
     for (parts, user) in set(of) - set(nf):
@@ -264,14 +344,35 @@ def apply_dataset(base, new_m, old_m, traverse):
     # hidden DALEJ dostępny wg ACL (soft hide, show-hidden odsłania). ──
     new_hidden = new_m.get("hidden", set())
     old_hidden = old_m.get("hidden", set())
+    new_present = nf_dirs | new_hidden
     for parts in new_hidden:
         target = os.path.join(base, *parts)
         if os.path.isdir(target) and set_hidden(target, True):
             log(f"  hide {'/'.join(parts)}")
-    for parts in old_hidden - new_hidden:
+    # unhide TYLKO foldery DALEJ obecne w manifeście (usunięte z manifestu →
+    # rmdir niżej, nie unhide — inaczej pusty ukryty folder znów widoczny).
+    for parts in (old_hidden - new_hidden) & new_present:
         target = os.path.join(base, *parts)
         if os.path.isdir(target) and set_hidden(target, False):
             log(f"  unhide {'/'.join(parts)}")
+
+    # ── dir removal full-state: folder w STARYM manifeście, brak w NOWYM →
+    # rmdir. BEZPIECZEŃSTWO: WYŁĄCZNIE pusty (os.rmdir → ENOTEMPTY gdy ma
+    # treść → zostaje+warn, ZERO utraty plików). Pasuje do APP content-gate
+    # (dropuje PUSTE RO foldery). Deepest-first = kolaps pustych drzew w 1
+    # przebiegu. allow_rmdir=False gdy projekt zniknął z manifestu (ochrona
+    # przed mass-delete przy transientnym/pustym manifeście). ──
+    if allow_rmdir:
+        old_present = {p for (p, _) in of} | old_hidden
+        for parts in sorted(old_present - new_present, key=len, reverse=True):
+            target = os.path.join(base, *parts)
+            if os.path.isdir(target):
+                try:
+                    os.rmdir(target)
+                    log(f"  rmdir {'/'.join(parts)}")
+                except OSError as e:
+                    warn(f"rmdir {'/'.join(parts)}: zostaje "
+                         f"({e.strerror}) — treść/subdiry")
 
 
 def sync_org(cfg, slug):
@@ -344,7 +445,9 @@ def sync_org(cfg, slug):
             f"{len(o.get('folders', {}))} files {len(n['files'])}/"
             f"{len(o.get('files', {}))} hidden {len(n.get('hidden', set()))} "
             f"traverse={traverse})")
-        apply_dataset(base, n, o, traverse)
+        apply_dataset(base, n, o, traverse, allow_rmdir=(root in new))
+
+    apply_veto(slug, manifest)
 
     for sk in (manifest.get("skippedFolders") or []) + \
               (manifest.get("skippedFiles") or []):
