@@ -30,6 +30,10 @@ STATE_DIR = "/var/lib/barvea-acl"
 ORG_BASE = "/srv/orgs"
 FORCE_INTERVAL = 3600
 CONTAINERS = ("WIP", "Shared", "Published", "Archive")
+# Phantom foldery APP — wystawiane w manifeście, ale puste (nic tam nie trafia).
+# NIE materializujemy (mkdir/acl/hidden pomijają), orphan-scan je usuwa. Zdjąć
+# gdy APP przestanie je emitować w manifeście (root-cause po ich stronie).
+SKIP_FOLDERS = {"Nieprzypisane"}
 
 DIR_PERMS = {"DOWNLOAD": "r-x", "WRITE": "rwx", "MANAGE": "rwx"}
 FILE_PERMS = {"DOWNLOAD": "r--", "WRITE": "rw-", "MANAGE": "rw-"}
@@ -97,6 +101,21 @@ def set_hidden(target, on):
         except OSError as e:
             warn(f"rmxattr {target}: {e}")
     return None
+
+
+def rmdir_empty_tree(path):
+    """Usuń dir tree WYŁĄCZNIE gdy CAŁE puste (zero plików gdziekolwiek).
+    Najpierw skan na pliki → jeden plik = cały tree zostaje (ZERO utraty).
+    Zero plików → rmdir bottom-up (kolaps pustego scaffoldingu)."""
+    for _root, _dirs, files in os.walk(path):
+        if files:
+            return False, "ma pliki"
+    for _root, _dirs, _files in os.walk(path, topdown=False):
+        try:
+            os.rmdir(_root)
+        except OSError as e:
+            return False, e.strerror
+    return True, None
 
 
 # ── VETO FILES (śmieci Win/mac + malware .exe) — web-konfigurowalny per-org.
@@ -258,6 +277,12 @@ def apply_dataset(base, new_m, old_m, traverse, allow_rmdir=True):
     nf, nfi = new_m["folders"], new_m["files"]
     of = old_m.get("folders", {})
     ofi = old_m.get("files", {})
+    # phantom filter: zdejmij foldery z SKIP_FOLDERS ze WSZYSTKICH ścieżek
+    # (mkdir/acl/hidden je pominą; nieobecne w new_present → orphan-scan usunie).
+    nf = {k: v for k, v in nf.items()
+          if not any(p in SKIP_FOLDERS for p in k[0])}
+    nfi = {k: v for k, v in nfi.items()
+           if not any(p in SKIP_FOLDERS for p in k[0])}
     nf_dirs = {p for (p, _) in nf}
 
     # ── strip: foldery (recursive dla wszystkich — grant też recursive) ──
@@ -342,7 +367,8 @@ def apply_dataset(base, new_m, old_m, traverse, allow_rmdir=True):
     # ── DOS-H (isHidden z CDE) full-state: manifest hidden→0x2, zdjęte→clear.
     # Osobno od ACL: hidden = kosmetyka widoczności, nie uprawnienia. Folder
     # hidden DALEJ dostępny wg ACL (soft hide, show-hidden odsłania). ──
-    new_hidden = new_m.get("hidden", set())
+    new_hidden = {p for p in new_m.get("hidden", set())
+                  if not any(x in SKIP_FOLDERS for x in p)}
     old_hidden = old_m.get("hidden", set())
     new_present = nf_dirs | new_hidden
     for parts in new_hidden:
@@ -356,23 +382,32 @@ def apply_dataset(base, new_m, old_m, traverse, allow_rmdir=True):
         if os.path.isdir(target) and set_hidden(target, False):
             log(f"  unhide {'/'.join(parts)}")
 
-    # ── dir removal full-state: folder w STARYM manifeście, brak w NOWYM →
-    # rmdir. BEZPIECZEŃSTWO: WYŁĄCZNIE pusty (os.rmdir → ENOTEMPTY gdy ma
-    # treść → zostaje+warn, ZERO utraty plików). Pasuje do APP content-gate
-    # (dropuje PUSTE RO foldery). Deepest-first = kolaps pustych drzew w 1
-    # przebiegu. allow_rmdir=False gdy projekt zniknął z manifestu (ochrona
-    # przed mass-delete przy transientnym/pustym manifeście). ──
-    if allow_rmdir:
-        old_present = {p for (p, _) in of} | old_hidden
-        for parts in sorted(old_present - new_present, key=len, reverse=True):
-            target = os.path.join(base, *parts)
-            if os.path.isdir(target):
-                try:
-                    os.rmdir(target)
-                    log(f"  rmdir {'/'.join(parts)}")
-                except OSError as e:
-                    warn(f"rmdir {'/'.join(parts)}: zostaje "
-                         f"({e.strerror}) — treść/subdiry")
+    # ── orphan cleanup (FS-scan full-state): dir na FS w kontenerze, BRAK w
+    # manifeście → rmdir. FS-scan (nie manifest-diff) bo stare sieroty nie ma
+    # w ŻADNYM manifeście — diff by je przegapił. Pasuje do APP content-gate:
+    # empty RO foldery dropowane z manifestu = mają zniknąć z B:. BEZPIECZEŃSTWO:
+    # rmdir_empty_tree usuwa TYLKO całkowicie puste drzewo (jeden plik gdziekolwiek
+    # → cały tree zostaje, ZERO utraty). Guard: tylko gdy manifest NIEPUSTY
+    # (new_present) — chroni przed mass-delete przy transientnym pustym manifeście.
+    # Depth-1 pod kontenerem; głębsze dropy łapie następny pull. ──
+    if allow_rmdir and new_present:
+        for c in CONTAINERS:
+            cdir = os.path.join(base, c)
+            if not os.path.isdir(cdir):
+                continue
+            allowed = {p[1] for p in new_present if len(p) >= 2 and p[0] == c}
+            try:
+                children = list(os.scandir(cdir))
+            except OSError:
+                continue
+            for e in children:
+                if not e.is_dir(follow_symlinks=False) or e.name in allowed:
+                    continue
+                ok, why = rmdir_empty_tree(e.path)
+                if ok:
+                    log(f"  rmdir-orphan {c}/{e.name}")
+                else:
+                    warn(f"rmdir-orphan {c}/{e.name}: zostaje ({why})")
 
 
 def sync_org(cfg, slug):
