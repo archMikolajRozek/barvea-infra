@@ -70,6 +70,35 @@ def setfacl(args):
     return r.returncode == 0
 
 
+DOSATTRIB = "user.DOSATTRIB"      # Samba `store dos attributes = yes` xattr
+HIDDEN_VAL = b"0x2"               # FILE_ATTRIBUTE_HIDDEN (legacy-hex, Samba czyta)
+
+
+def set_hidden(target, on):
+    """DOS-H na katalogu (isHidden z CDE). store dos attributes=yes → Samba
+    czyta user.DOSATTRIB; 0x2=HIDDEN → folder ukryty (show-hidden odsłania;
+    dostęp wg ACL BEZ zmian — soft cosmetic hide). CDE = źródło prawdy: klient
+    nie nadpisze (re-assert co pull). Idempotent (write tylko gdy drift)."""
+    try:
+        cur = os.getxattr(target, DOSATTRIB)
+    except OSError:
+        cur = None
+    if on:
+        if cur != HIDDEN_VAL:
+            try:
+                os.setxattr(target, DOSATTRIB, HIDDEN_VAL)
+                return "hide"
+            except OSError as e:
+                warn(f"setxattr H {target}: {e}")
+    elif cur is not None:
+        try:
+            os.removexattr(target, DOSATTRIB)
+            return "unhide"
+        except OSError as e:
+            warn(f"rmxattr {target}: {e}")
+    return None
+
+
 def valid_component(c):
     return bool(c) and c not in (".", "..") and "/" not in c and "\\" not in c \
         and "\x00" not in c and not any(ord(ch) < 32 for ch in c)
@@ -102,13 +131,15 @@ def entries_map(manifest):
     out = {}
     for proj in manifest.get("projects", []):
         root = proj.get("datasetRoot", "")
-        m = out.setdefault(root, {"folders": {}, "files": {}})
+        m = out.setdefault(root, {"folders": {}, "files": {}, "hidden": set()})
         for acl in proj.get("acls", []) or []:
             parts = rel_parts(acl.get("path", ""))
             if parts is None or parts[0] not in CONTAINERS:
                 warn(f"manifest: folder path poza kontenerem "
                      f"{acl.get('path')!r} w {root} (skip)")
                 continue
+            if acl.get("hidden"):        # isHidden z CDE → DOS-H na FS
+                m["hidden"].add(tuple(parts))
             for e in acl.get("entries", []) or []:
                 user = e.get("smbUsername") or ""
                 lvl = e.get("level") or ""
@@ -228,6 +259,20 @@ def apply_dataset(base, new_m, old_m, traverse):
                 setfacl(["-x", f"u:{user}", d])
         log(f"  traverse-cleanup u:{user} ({len(anc)} dirs)")
 
+    # ── DOS-H (isHidden z CDE) full-state: manifest hidden→0x2, zdjęte→clear.
+    # Osobno od ACL: hidden = kosmetyka widoczności, nie uprawnienia. Folder
+    # hidden DALEJ dostępny wg ACL (soft hide, show-hidden odsłania). ──
+    new_hidden = new_m.get("hidden", set())
+    old_hidden = old_m.get("hidden", set())
+    for parts in new_hidden:
+        target = os.path.join(base, *parts)
+        if os.path.isdir(target) and set_hidden(target, True):
+            log(f"  hide {'/'.join(parts)}")
+    for parts in old_hidden - new_hidden:
+        target = os.path.join(base, *parts)
+        if os.path.isdir(target) and set_hidden(target, False):
+            log(f"  unhide {'/'.join(parts)}")
+
 
 def sync_org(cfg, slug):
     etag_f = os.path.join(STATE_DIR, f"{slug}.etag")
@@ -288,7 +333,7 @@ def sync_org(cfg, slug):
             warn(f"{slug}: zły datasetRoot {root!r} / orgId "
                  f"{manifest_org_id!r} (skip)")
             continue
-        empty = {"folders": {}, "files": {}}
+        empty = {"folders": {}, "files": {}, "hidden": set()}
         n = new.get(root, empty)
         o = old.get(root, empty)
         if not os.path.isdir(base):
@@ -297,7 +342,8 @@ def sync_org(cfg, slug):
             continue
         log(f"{slug}: reconcile {root} (dirs {len(n['folders'])}/"
             f"{len(o.get('folders', {}))} files {len(n['files'])}/"
-            f"{len(o.get('files', {}))} traverse={traverse})")
+            f"{len(o.get('files', {}))} hidden {len(n.get('hidden', set()))} "
+            f"traverse={traverse})")
         apply_dataset(base, n, o, traverse)
 
     for sk in (manifest.get("skippedFolders") or []) + \

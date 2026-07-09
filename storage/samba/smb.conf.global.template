@@ -23,6 +23,20 @@
    # dziedziczy default-ACL folderu (WIP folder-inheritance) (2026-07-08)
    inherit acls = yes
 
+   # Performance (2026-07-09) — Revit central + duże RVT po WG tunelu.
+   # TCP_NODELAY KLUCZOWE: central sypie małymi pakietami, bez tego Nagle
+   # dławi po WG. sendfile+aio = szybszy transfer wielkich plików. oplocks
+   # = client-side lock caching (mniej round-tripów). strict sync=no = nie
+   # fsync per write (Revit robi tysiące). Stock Samba = wszystko off/domyślne.
+   socket options = TCP_NODELAY IPTOS_LOWDELAY
+   use sendfile = yes
+   aio read size = 16384
+   aio write size = 16384
+   min receivefile size = 16384
+   oplocks = yes
+   level2 oplocks = yes
+   strict sync = no
+
    # vfs stack: full_audit (journal) + shadow_copy2 (Previous Versions z
    # sanoid). UWAGA: catia+fruit USUNIĘTE — robiły TMPNAME-dance przy mkdir
    # (rename „Item Not Found") + śmieciły journal; Windows ich nie potrzebuje.
