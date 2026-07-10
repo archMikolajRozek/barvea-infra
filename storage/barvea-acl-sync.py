@@ -396,6 +396,11 @@ def apply_dataset(base, new_m, old_m, traverse, allow_rmdir=True):
             if not os.path.isdir(cdir):
                 continue
             allowed = {p[1] for p in new_present if len(p) >= 2 and p[0] == c}
+            if not allowed:
+                continue          # kontener bez folderów w manifeście = APP go
+                #  NIE zarządza (np. Archive) → NIE ruszamy (bez tego cały
+                #  kontener = orphany → puste by zniknęły). Prune tylko tam gdzie
+                #  manifest realnie definiuje strukturę.
             try:
                 children = list(os.scandir(cdir))
             except OSError:
