@@ -30,10 +30,6 @@ STATE_DIR = "/var/lib/barvea-acl"
 ORG_BASE = "/srv/orgs"
 FORCE_INTERVAL = 3600
 CONTAINERS = ("WIP", "Shared", "Published", "Archive")
-# Phantom foldery APP — wystawiane w manifeście, ale puste (nic tam nie trafia).
-# NIE materializujemy (mkdir/acl/hidden pomijają), orphan-scan je usuwa. Zdjąć
-# gdy APP przestanie je emitować w manifeście (root-cause po ich stronie).
-SKIP_FOLDERS = {"Nieprzypisane"}
 
 DIR_PERMS = {"DOWNLOAD": "r-x", "WRITE": "rwx", "MANAGE": "rwx"}
 FILE_PERMS = {"DOWNLOAD": "r--", "WRITE": "rw-", "MANAGE": "rw-"}
@@ -277,12 +273,6 @@ def apply_dataset(base, new_m, old_m, traverse, allow_rmdir=True):
     nf, nfi = new_m["folders"], new_m["files"]
     of = old_m.get("folders", {})
     ofi = old_m.get("files", {})
-    # phantom filter: zdejmij foldery z SKIP_FOLDERS ze WSZYSTKICH ścieżek
-    # (mkdir/acl/hidden je pominą; nieobecne w new_present → orphan-scan usunie).
-    nf = {k: v for k, v in nf.items()
-          if not any(p in SKIP_FOLDERS for p in k[0])}
-    nfi = {k: v for k, v in nfi.items()
-           if not any(p in SKIP_FOLDERS for p in k[0])}
     nf_dirs = {p for (p, _) in nf}
 
     # ── strip: foldery (recursive dla wszystkich — grant też recursive) ──
@@ -367,8 +357,7 @@ def apply_dataset(base, new_m, old_m, traverse, allow_rmdir=True):
     # ── DOS-H (isHidden z CDE) full-state: manifest hidden→0x2, zdjęte→clear.
     # Osobno od ACL: hidden = kosmetyka widoczności, nie uprawnienia. Folder
     # hidden DALEJ dostępny wg ACL (soft hide, show-hidden odsłania). ──
-    new_hidden = {p for p in new_m.get("hidden", set())
-                  if not any(x in SKIP_FOLDERS for x in p)}
+    new_hidden = new_m.get("hidden", set())
     old_hidden = old_m.get("hidden", set())
     new_present = nf_dirs | new_hidden
     for parts in new_hidden:
