@@ -11,9 +11,9 @@ węzeł; Storage Box u592993, port 23). **Hasło repo: /root/.config/restic/pass
 | Postgres pg_dump + redis + /mnt/minio-data (legacy) + /etc | VM 101 barvea-data | 03:09 | ✅ |
 | WG klucze/peery + nftables + network | VM 100 barvea-infra | 03:38 | ✅ |
 | ~/barvea (compose/app) + Caddy volumes (LE certy) + /etc | VM 102 barvea-app | 03:45 | ✅ |
-| **/hddpool/orgs — CAŁE dane CDE/Drive orgów** | **host** | — | 🔴 **BRAK do 2026-07** → `barvea-host-backup.sh` (04:15) |
-| **Vault /opt/vault/data** (PKI, transit, AppRole; bez tego .ct kluczy org NIE odszyfrujesz) | **host** (subvol LXC 200) | — | 🔴 **BRAK** → j.w. (z sanoid-snapshotu = spójny) |
-| /etc/zfs/keys/*.ct + /etc/vault + /etc/pve (defy gości) + nftables/sanoid/fail2ban + /usr/local/sbin | **host** | — | 🔴 **BRAK** → j.w. |
+| **/hddpool/orgs — CAŁE dane CDE/Drive orgów** | **host** | 04:15 | ✅ od 2026-07-13 (`barvea-host-backup.sh`; 1. run: 790 MiB, snap 0bdcca53) |
+| **Vault /opt/vault/data** (PKI, transit, AppRole; bez tego .ct kluczy org NIE odszyfrujesz) | **host** (subvol LXC 200) | 04:15 | ✅ od 2026-07-13 (z sanoid-snapshotu = crash-consistent) |
+| /etc/zfs/keys/*.ct + /etc/vault + /etc/pve (defy gości) + nftables/sanoid/fail2ban + /usr/local/sbin | **host** | 04:15 | ✅ od 2026-07-13 |
 
 Lokalne warstwy (nie zastępują off-site): RAIDZ2 (dyski), sanoid (snapshoty
 co 15 min na TYM SAMYM poolu), backup pre-deploy Postgresa (deploy.sh).
