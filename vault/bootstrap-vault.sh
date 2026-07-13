@@ -148,7 +148,9 @@ have_key update-manifest-ed25519 || vault write -f transit/keys/update-manifest-
 have_key wdac-policy-ed25519     || vault write -f transit/keys/wdac-policy-ed25519 type=ed25519
 # (test-key z proda pominięty celowo — artefakt testowy)
 
-# ── 7. Audit (OPCJA — prod 2026-07-10 NIE ma audit device!) ────────
+# ── 7. Audit (prod MA od 2026-07-10: file audit + logrotate
+#      /etc/logrotate.d/vault-audit weekly/12/compress/copytruncate;
+#      przy fresh-install odpalaj z ENABLE_AUDIT=1 żeby odtworzyć).
 # UWAGA: gdy audit device przestanie być zapisywalny (pełny dysk),
 # Vault BLOKUJE wszystkie requesty (by design). Zapewnij logrotate.
 if [ "${ENABLE_AUDIT:-0}" = "1" ]; then

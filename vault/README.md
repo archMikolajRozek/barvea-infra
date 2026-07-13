@@ -30,9 +30,10 @@ każda zmiana polityk/ról/kluczy na żywym → dopisz do `bootstrap-vault.sh`.
 - `agent-registry/` — builtin Vault 2.0, montuje się sam.
 
 ## Znane odstępstwa na prodzie (stan 2026-07-10)
-- 🚩 **Brak audit device** — Vault nie loguje operacji. Do włączenia:
-  `ENABLE_AUDIT=1` (albo ręcznie na żywym; wymaga logrotate — pełny dysk
-  audit = Vault blokuje requesty by design).
+- ✅ **Audit device WŁĄCZONY 2026-07-10**: `file → /opt/vault/audit.log`
+  + logrotate `/etc/logrotate.d/vault-audit` (weekly, rotate 12, compress,
+  copytruncate). Fresh-install: `ENABLE_AUDIT=1` + odtwórz logrotate
+  (uwaga: niedostępny audit = Vault blokuje requesty by design).
 - 🚩 **TLS listenera = defaultowy self-signed** (CN=Vault, zero SANs) →
   klienci używają skip-verify/pinowania pliku. Fix: `ISSUE_VAULT_TLS=1`
   po bootstrapie PKI, podmiana `/opt/vault/tls/*`, `systemctl reload vault`
