@@ -1,0 +1,14 @@
+# BARVEA host — /etc/systemd/system/barvea-backup.service (instalacja:
+# cp → bez ".host" w nazwie; patrz backup/README.md)
+[Unit]
+Description=Barvea HOST nightly backup (orgs+vault+configs) to Hetzner Storage Box
+After=network-online.target zfs-mount.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/local/sbin/barvea-host-backup.sh
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=4h

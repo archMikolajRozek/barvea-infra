@@ -1,0 +1,12 @@
+# BARVEA host — /etc/systemd/system/barvea-backup.timer (04:15 — po
+# VM-kach 03:09/03:38/03:45, bez kolizji na Storage Boxie)
+[Unit]
+Description=Run Barvea HOST backup nightly at 04:15 with randomized delay
+
+[Timer]
+OnCalendar=*-*-* 04:15:00
+RandomizedDelaySec=15min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
