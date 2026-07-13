@@ -1,0 +1,17 @@
+# BARVEA bootstrap.sh — konfiguracja (skopiuj do bootstrap.conf i uzupełnij).
+# Bez pliku = defaulty (layout proda). Pełna lista zmiennych: nagłówek bootstrap.sh.
+
+# WYMAGANE gdy pool nie istnieje (świeży serwer) — dyski po by-id!
+#POOL_DISKS="/dev/disk/by-id/ata-XXX /dev/disk/by-id/ata-YYY /dev/disk/by-id/ata-ZZZ /dev/disk/by-id/ata-WWW"
+#POOL_RAID=raidz2
+
+# Air-gap (dedyk bez internetu): katalog z artefaktami — template LXC
+# (*.tar.zst), debian-13-genericcloud-amd64.qcow2, paczki .deb (vault,
+# docker, postgres/PGDG mirror), bundle aplikacji. Puste = online.
+#ASSETS_DIR=/root/barvea-assets
+
+#LAN=10.10.0
+#SSH_PORT=2277
+#CI_USER=miko
+#PVE_STORAGE=hdd-pool
+#POOL_NAME=hddpool
