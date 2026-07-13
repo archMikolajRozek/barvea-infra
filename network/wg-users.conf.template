@@ -1,0 +1,42 @@
+# ═══════════════════════════════════════════════════════════════════
+# BARVEA — VM 100 barvea-infra /etc/wireguard/wg-users.conf (TEMPLATE,
+# zrzut [Interface]+PostUp 1:1 z żywego 2026-07-13; klucze NIE w git).
+# Tunel USERS/DEVICES (desktop Drive, laptopy): 10.67.0.0/16, port 51821
+# (host DNAT-uje publiczny 51821/udp → 10.10.0.10).
+#
+# FIREWALL HUB-SPOKE ŻYJE TUTAJ (PostUp = BARVEA_USER_IN):
+#   - intra-WG DROP (device↔device zablokowane),
+#   - z 10.67/16 dozwolone WYŁĄCZNIE: Samba 10.10.0.40:445/tcp
+#     + app 10.10.0.30:443/tcp (TYLKO TCP → brak h3/QUIC przez tunel
+#     users — celowe; h3 działa tylko na publicznym edge),
+#   - reszta LOG "BARVEA_USER_DROP " + DROP.
+# Persistence: systemctl enable wg-quick@wg-users (PostUp odtwarza łańcuch
+# przy każdym starcie; nftables.service na VM 100 DISABLED — tak ma być,
+# netfilter-persistent BRAK — reguły żyją wyłącznie w tym pliku).
+#
+# [Peer] bloki DOPISUJE wg-provisiond (wg-control/wg-provisiond.py):
+# PublicKey + PresharedKey + AllowedIPs <ip>/32 z puli 10.67/16.
+# Klucze serwera: /etc/wireguard/server_private.key (0600, restic/Bitwarden).
+# ⚠️ KEEP-IN-SYNC z żywym plikiem (poza [Peer] i PrivateKey).
+# ═══════════════════════════════════════════════════════════════════
+[Interface]
+PrivateKey = __WG_USERS_SERVER_PRIVATE_KEY__
+ListenPort = 51821
+Address = 10.67.0.1/16
+SaveConfig = false
+MTU = 1420
+PostUp = iptables -N BARVEA_USER_IN 2>/dev/null || iptables -F BARVEA_USER_IN
+PostUp = iptables -A BARVEA_USER_IN -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+PostUp = iptables -A BARVEA_USER_IN -s 10.67.0.0/16 -d 10.67.0.0/16 -j DROP
+PostUp = iptables -A BARVEA_USER_IN -s 10.67.0.0/16 -d 10.10.0.40/32 -p tcp --dport 445 -j ACCEPT
+PostUp = iptables -A BARVEA_USER_IN -s 10.67.0.0/16 -d 10.10.0.30/32 -p tcp --dport 443 -j ACCEPT
+PostUp = iptables -A BARVEA_USER_IN -j LOG --log-prefix "BARVEA_USER_DROP " --log-level 4
+PostUp = iptables -A BARVEA_USER_IN -j DROP
+PostUp = iptables -I FORWARD 1 -i wg-users -j BARVEA_USER_IN
+PostUp = iptables -t nat -A POSTROUTING -s 10.67.0.0/16 -o ens18 -j MASQUERADE
+PostDown = iptables -t nat -D POSTROUTING -s 10.67.0.0/16 -o ens18 -j MASQUERADE
+PostDown = iptables -D FORWARD -i wg-users -j BARVEA_USER_IN
+PostDown = iptables -F BARVEA_USER_IN
+PostDown = iptables -X BARVEA_USER_IN
+
+# [Peer] bloki poniżej — zarządza wg-provisiond, NIE edytuj ręcznie.

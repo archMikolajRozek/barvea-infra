@@ -1,0 +1,15 @@
+# BARVEA — VM 100 barvea-infra /etc/wireguard/wg0.conf (TEMPLATE, zrzut
+# 2026-07-13; klucze NIE w git). Tunel ADMIN (Miko): 10.9.0.0/24, port
+# 51820 (host DNAT publiczny 51820/udp → 10.10.0.10). Bez łańcucha
+# BARVEA_USER_IN — admin ma pełny dostęp do LAN (FORWARD accept na VM).
+# NAT przez nft (osobna tabela wg_nat, sprzątana w PostDown).
+# Persistence: systemctl enable wg-quick@wg0. Peery admin = ręcznie.
+# ⚠️ KEEP-IN-SYNC z żywym plikiem (poza [Peer] i PrivateKey).
+[Interface]
+PrivateKey = __WG0_SERVER_PRIVATE_KEY__
+Address = 10.9.0.1/24
+ListenPort = 51820
+PostUp = nft add table inet wg_nat; nft add chain inet wg_nat POSTROUTING { type nat hook postrouting priority 100\; }; nft add rule inet wg_nat POSTROUTING ip saddr 10.9.0.0/24 oifname ens18 masquerade
+PostDown = nft delete table inet wg_nat
+
+# [Peer] bloki admin devices — ręcznie (PublicKey + AllowedIPs 10.9.0.X/32).

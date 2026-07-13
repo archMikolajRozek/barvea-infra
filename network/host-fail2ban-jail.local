@@ -1,0 +1,15 @@
+# BARVEA — barvea-host /etc/fail2ban/jail.local (IaC copy 2026-07-13).
+# Instalacja: apt install fail2ban; cp → /etc/fail2ban/jail.local;
+# systemctl enable --now fail2ban. (jail.d/defaults-debian.conf = pakietowy
+# default Debiana, zostaje.) SSH hosta = port 2277. KEEP-IN-SYNC.
+
+[DEFAULT]
+bantime = 3600
+findtime = 600
+maxretry = 5
+backend = systemd
+
+[sshd]
+enabled = true
+port = 2277
+backend = systemd
