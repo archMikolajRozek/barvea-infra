@@ -1,0 +1,25 @@
+# BARVEA — /etc/samba/per-org/__ORG_SLUG__.conf (TEMPLATE; wzorzec 1:1 z
+# żywego archbimcloud.conf 2026-07-13). Nowy org (procedura ręczna, patrz
+# proxmox/zfs-layout.md):
+#   1. zapisz ten plik z podstawionymi __ORG_SLUG__ / __ORG_ID__
+#   2. dopisz do /etc/samba/smb.conf:  include = /etc/samba/per-org/__ORG_SLUG__.conf
+#   3. smbcontrol smbd reload-config   (include+share = reload wystarczy)
+#   4. dopisz slug do ORG_SLUGS w /etc/barvea/acl-sync.env
+# Share-name MUSI = org.slug (klient montuje \\drive.barvea.internal\<slug>).
+# acl-sync dopisze tu "include = ...veto.conf" gdy APP włączy vetoFiles.
+# NOTA: brak `smb encrypt = required` per-share — transport szyfruje WG
+# (klienci wchodzą wyłącznie tunelem); dublowanie SMB-encrypt = decyzja
+# świadoma przy dedyk (koszt CPU vs defense-in-depth). KEEP-IN-SYNC.
+
+[__ORG_SLUG__]
+   path = /srv/orgs/__ORG_ID__
+   browseable = no
+   read only = no
+   guest ok = no
+   hide unreadable = yes
+   access based share enum = yes
+   hide dot files = yes
+   valid users = @org-__ORG_ID__
+   force group = org-__ORG_ID__
+   create mask = 0600
+   directory mask = 0700
