@@ -35,28 +35,40 @@ Właściwości LOCAL na org-datasecie (wzorzec `cmoiknvvz…`):
 zfs create -o encryption=aes-256-gcm -o keyformat=passphrase \
   -o keylocation=prompt -o compression=zstd -o xattr=sa \
   -o acltype=posix -o refquota=2T hddpool/orgs/<orgId>
-# passphrase → Bitwarden (per-org!)
+# passphrase: wygenerowana → zawinąć Vault transit per-org-keys →
+#   zapisz ciphertext do /etc/zfs/keys/<orgId>.ct (patrz zfs-load-org.sh)
 # bind-mount do LXC 201 (KAŻDY nowy org = nowy mpN — patrz README.md):
 pct set 201 -mp<N> /hddpool/orgs/<orgId>,mp=/srv/orgs/<orgId>
-# w LXC: grupa org-<orgId>, chown root:org-<gid> + 2770 na kontenerach —
-# robi provision-org.sh (⚠️ TODO: żyje na hoście, NIE w repo — wciągnąć).
+# w LXC 201: groupadd org-<orgId> (gid 50xx), chown root:org-<gid> +
+#   2770 na kontenerach WIP/Shared/Published/Archive, share [<slug>] w
+#   /etc/samba/per-org/ + include, ORG_SLUGS w acl-sync.env.
+# ⚠️ provision-org.sh NIE ISTNIEJE (find po hoście: brak) — org-provision
+#   to dziś RĘCZNA procedura (powyższe kroki); skrypt = backlog.
 ```
 
-## 🔴 DR — szyfrowanie z keylocation=prompt (KRYTYCZNE)
+## 🔴 DR — szyfrowanie org-datasetów (KRYTYCZNE, kolejność po reboocie)
 
-Po **reboocie hosta** org-datasety są LOCKED (klucz nie jest nigdzie na
-dysku). Kolejność ręczna ZANIM storage wstanie:
+`keylocation=prompt`, ale klucze NIE są wpisywane ręcznie — **envelope
+przez Vault**: passphrase per-org zawinięta transitem `per-org-keys`
+leży jako ciphertext w `/etc/zfs/keys/<orgId>.ct` (host). Odblokowuje
+`/usr/local/sbin/zfs-load-org.sh` (kopia: `zfs-load-org.sh` obok;
+AppRole creds: `/etc/vault/storage-approle` — NIE w git).
 
+**Po reboocie hosta (ręczna sekwencja — nic tego nie automatyzuje):**
 ```bash
-zfs load-key hddpool/orgs/<orgId>     # per dataset, passphrase z Bitwarden
-zfs mount -a
-pct start 201                          # dopiero teraz Samba widzi dane
+# 1. Vault UP + UNSEAL (LXC 200 wstaje sam, ale SEALED — Shamir 3/5)
+pct enter 200   # vault operator unseal ×3
+# 2. odblokuj org-datasety (host)
+/usr/local/sbin/zfs-load-org.sh
+# 3. restart storage, żeby bind-mounty złapały zamontowane datasety
+pct stop 201 && pct start 201
 ```
 
-LXC 201 ma `onboot=1` — wstanie z PUSTYMI mountpointami jeśli klucze
-niezaładowane → Samba pokaże puste share'y (nie błąd, cisza!). Po
-load-key + mount → `pct stop 201 && pct start 201` (żeby bind-mounty
-złapały zamontowane datasety).
+LXC 201 `onboot=1` wstaje PRZED odblokowaniem → Samba pokazuje **puste
+share'y po cichu** (nie błąd!) dopóki nie zrobisz kroków 1-3. Łańcuch
+zależności: **unseal → zfs-load-org.sh → restart 201**. Nowy org =
+nowy `/etc/zfs/keys/<orgId>.ct` (passphrase wrap transitem przy
+tworzeniu datasetu).
 
 ## Snapshoty — sanoid (host, `/etc/sanoid/sanoid.conf` → kopia obok)
 
