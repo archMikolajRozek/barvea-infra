@@ -61,6 +61,19 @@ restic backup \
   /usr/local/sbin \
   --host "$HOST" --tag configs --tag daily 2>&1 | tee -a "$LOG" || log "Configs warn"
 
+# ── Configi WEWNĄTRZ LXC (rootfs-y na subvolach hosta — restic VM-ek ich
+# NIE widzi, a bez nich odtworzenie 200/201 = ręczna rekonstrukcja):
+# 201: tokeny daemonów (/etc/barvea), smb.conf+per-org share'y, uid-counter;
+# 200: vault.hcl. (ACL-state /var/lib/barvea-acl celowo NIE — cache,
+# odbuduje się z manifestu APP przy pierwszym pullu.) ──
+log "LXC configs (201: barvea+samba+uid-counter, 200: vault.d)..."
+restic backup \
+  /hddpool/subvol-201-disk-0/etc/barvea \
+  /hddpool/subvol-201-disk-0/etc/samba \
+  /hddpool/subvol-201-disk-0/var/lib/barvea-smb \
+  /hddpool/subvol-200-disk-0/etc/vault.d \
+  --host "$HOST" --tag lxc-configs --tag daily 2>&1 | tee -a "$LOG" || log "LXC configs warn"
+
 log "Forget/prune (host-scoped)..."
 restic forget --host "$HOST" --tag daily \
   --keep-daily 7 --keep-weekly 4 --keep-monthly 12 --keep-yearly 5 \
