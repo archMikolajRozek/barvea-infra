@@ -1,0 +1,26 @@
+# BARVEA — /etc/vault.d/vault.hcl (IaC template; zrzut z proda 2026-07-10,
+# LXC 200 @10.10.0.50, Vault 2.0.0, storage=file, Shamir 5 shares / próg 3).
+# Placeholdery: __VAULT_IP__ (prod: 10.10.0.50)
+# ⚠️ KEEP-IN-SYNC: każda zmiana na żywym vault.hcl → dopisz tutaj.
+
+ui = true
+
+# LXC bez CAP_IPC_LOCK — mlock off (akceptowane; host = nasz)
+disable_mlock = true
+
+# storage file → DR = restic /opt/vault/data + unseal (patrz README.md)
+storage "file" {
+  path = "/opt/vault/data"
+}
+
+listener "tcp" {
+  address       = "0.0.0.0:8200"
+  tls_cert_file = "/opt/vault/tls/tls.crt"
+  tls_key_file  = "/opt/vault/tls/tls.key"
+  # ⚠️ prod 2026-07-10: tls.crt = DEFAULTOWY self-signed (CN=Vault, zero
+  # SANs) → klienci skip-verify/pin. Docelowo: bootstrap-vault.sh
+  # ISSUE_VAULT_TLS=1 → cert z pki_int (vault.barvea.internal + IP SAN)
+  # → podmiana plików → systemctl reload vault (NIE restart — reseal!).
+}
+
+api_addr = "https://__VAULT_IP__:8200"
