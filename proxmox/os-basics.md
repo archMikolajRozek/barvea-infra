@@ -29,9 +29,16 @@ Host: publiczny IPv4 178.63.205.222 + IPv6 2a01:4f8:2240:13d5::2
 ## Nazwy internal — gdzie resolve
 `app.barvea.internal` (Caddy internal vhost, cert pki_int) i
 `drive.barvea.internal` (Samba) NIE są w hosts VM-ek — resolve żyje:
-- LXC 201: /etc/hosts (acl-sync → app.barvea.internal) — [potwierdzić wpis]
+- **LXC 201 /etc/hosts (potwierdzone 2026-07-13):**
+  `10.10.0.40 barvea-storage` + `10.10.0.30 app.barvea.internal`
+  (acl-sync woła manifest po nazwie). LXC 200 (vault): brak wpisów —
+  nic stamtąd nie woła po nazwie (klienci biją w vault po IP :8200).
 - klienty Windows (Drive): wpis hosts stawiany przez klienta/instalację
 - fresh-build: dopisać do hosts LXC 201 + dokumentacji klienta
+
+Legacy: share `test-org-001` ma stare maski 0660/2770 (model group-writable
+sprzed per-file WIP privacy) — celowo niezmieniane (testowy); realne orgi =
+0600/0700 jak w per-org.conf.template.
 
 ## Docker
 Tylko VM 102: Docker 29.4.1 (repo dockera, nie debianowy). Compose v2
