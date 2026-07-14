@@ -275,14 +275,13 @@ host  barvea  barvea_app    ${LAN}.0/24   scram-sha-256
 host  all     barvea_admin  10.9.0.0/24   scram-sha-256
 host  all     postgres      10.9.0.0/24   scram-sha-256
 HBA
-    mkdir -p \$PGC/conf.d
-    printf \"listen_addresses = \\047localhost,$ip\\047\\n\" > \$PGC/conf.d/barvea.conf
+    pg_conftool 18 main set listen_addresses localhost,$ip
     systemctl restart postgresql@18-main
-    sudo -u postgres psql -tc \"SELECT 1 FROM pg_roles WHERE rolname='barvea_app'\" | grep -q 1 || \
-        sudo -u postgres psql -c \"CREATE ROLE barvea_app LOGIN PASSWORD '$PGA'\"
-    sudo -u postgres psql -tc \"SELECT 1 FROM pg_roles WHERE rolname='barvea_admin'\" | grep -q 1 || \
-        sudo -u postgres psql -c \"CREATE ROLE barvea_admin LOGIN SUPERUSER PASSWORD '$PGD'\"
-    sudo -u postgres psql -tc \"SELECT 1 FROM pg_database WHERE datname='barvea'\" | grep -q 1 || \
+    sudo -u postgres psql -tc \"SELECT 1 FROM pg_roles WHERE rolname=\\047barvea_app\\047\" | grep -q 1 || \
+        sudo -u postgres psql -c \"CREATE ROLE barvea_app LOGIN PASSWORD \\047$PGA\\047\"
+    sudo -u postgres psql -tc \"SELECT 1 FROM pg_roles WHERE rolname=\\047barvea_admin\\047\" | grep -q 1 || \
+        sudo -u postgres psql -c \"CREATE ROLE barvea_admin LOGIN SUPERUSER PASSWORD \\047$PGD\\047\"
+    sudo -u postgres psql -tc \"SELECT 1 FROM pg_database WHERE datname=\\047barvea\\047\" | grep -q 1 || \
         sudo -u postgres createdb -O barvea_app barvea"
   # TODO tuning (świadomie stock jak prod): shared_buffers itd. — osobna decyzja
 }
