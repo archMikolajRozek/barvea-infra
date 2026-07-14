@@ -135,6 +135,18 @@ EOF
       ifreload -a || echo "⚠️  ifreload padł — sprawdź sieć zanim polecisz dalej"
   fi
 
+  log "HOST: repo apt (świeży PVE: enterprise bez subskrypcji psuje apt)"
+  for f in /etc/apt/sources.list.d/pve-enterprise.sources \
+           /etc/apt/sources.list.d/pve-enterprise.list \
+           /etc/apt/sources.list.d/ceph.sources; do
+      [ -f "$f" ] && mv "$f" "$f.disabled"
+  done
+  if ! grep -rq pve-no-subscription /etc/apt/sources.list /etc/apt/sources.list.d/ 2>/dev/null; then
+      echo "deb http://download.proxmox.com/debian/pve $(. /etc/os-release; echo "$VERSION_CODENAME") pve-no-subscription" \
+          > /etc/apt/sources.list.d/pve-no-sub.list
+  fi
+  apt-get update -qq || true
+
   log "HOST: nftables + fail2ban + sanoid + zfs-load-org"
   # template ma literały proda (10.10.0.*, 51820/51821) → podstaw parametry
   sed -e "s|10\.10\.0\.|${LAN}.|g" -e "s|51821|$WG_USERS_PORT|g" \
@@ -144,6 +156,7 @@ EOF
   DEBIAN_FRONTEND=noninteractive apt-get install -y fail2ban sanoid jq >/dev/null
   install -m 644 "$REPO_DIR/network/host-fail2ban-jail.local" /etc/fail2ban/jail.local
   systemctl enable --now fail2ban
+  mkdir -p /etc/sanoid   # pakiet Debiana NIE tworzy katalogu (quirk, run1 staging)
   install -m 644 "$REPO_DIR/proxmox/sanoid.conf" /etc/sanoid/sanoid.conf
   systemctl enable --now sanoid.timer
   install -m 755 "$REPO_DIR/proxmox/zfs-load-org.sh" /usr/local/sbin/zfs-load-org.sh
