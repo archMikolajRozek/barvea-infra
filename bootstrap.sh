@@ -69,7 +69,9 @@ log()  { printf '\n\033[1;36m── %s\033[0m\n' "$*"; }
 die()  { printf '\033[1;31mFATAL: %s\033[0m\n' "$*" >&2; exit 1; }
 done_f(){ [ -f "$STATE/$1.done" ]; }
 mark() { mkdir -p "$STATE"; touch "$STATE/$1.done"; }
-gen()  { tr -dc 'A-Za-z0-9' </dev/urandom | head -c "${1:-48}"; }
+# UWAGA pipefail: `tr </dev/urandom | head` = SIGPIPE tr (rc141) = set -e
+# ubija skrypt (run2 staging, zdechł na WGTOK=$(gen)). dd ogranicza wejście.
+gen()  { dd if=/dev/urandom bs=256 count=1 2>/dev/null | tr -dc 'A-Za-z0-9' | head -c "${1:-48}"; }
 cred() { printf '%s\n' "$*" >> "$CREDS"; chmod 600 "$CREDS"; }
 fetch(){ # fetch <url> <dst> — ASSETS_DIR first (air-gap), inaczej download
   local url="$1" dst="$2" base; base=$(basename "$url")
