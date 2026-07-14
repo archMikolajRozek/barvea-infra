@@ -276,13 +276,26 @@ host  all     barvea_admin  10.9.0.0/24   scram-sha-256
 host  all     postgres      10.9.0.0/24   scram-sha-256
 HBA
     pg_conftool 18 main set listen_addresses localhost,$ip
-    systemctl restart postgresql@18-main
-    sudo -u postgres psql -tc \"SELECT 1 FROM pg_roles WHERE rolname=\\047barvea_app\\047\" | grep -q 1 || \
-        sudo -u postgres psql -c \"CREATE ROLE barvea_app LOGIN PASSWORD \\047$PGA\\047\"
-    sudo -u postgres psql -tc \"SELECT 1 FROM pg_roles WHERE rolname=\\047barvea_admin\\047\" | grep -q 1 || \
-        sudo -u postgres psql -c \"CREATE ROLE barvea_admin LOGIN SUPERUSER PASSWORD \\047$PGD\\047\"
-    sudo -u postgres psql -tc \"SELECT 1 FROM pg_database WHERE datname=\\047barvea\\047\" | grep -q 1 || \
-        sudo -u postgres createdb -O barvea_app barvea"
+    systemctl restart postgresql@18-main"
+  # SQL PLIKIEM (psql -f) — jedyna odporna droga przez warstwy cytowania
+  # vm_ssh (run4/5: apostrofy zjadane, \047 to printf-izm). Idempotencja:
+  # DO $$…$$ na role, \gexec na bazę (CREATE DATABASE nie może w DO).
+  local SQL=/tmp/.pg.$$
+  cat > "$SQL" <<SQLEOF
+DO \$\$BEGIN
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='barvea_app') THEN
+    CREATE ROLE barvea_app LOGIN PASSWORD '$PGA';
+  END IF;
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='barvea_admin') THEN
+    CREATE ROLE barvea_admin LOGIN SUPERUSER PASSWORD '$PGD';
+  END IF;
+END\$\$;
+SELECT 'CREATE DATABASE barvea OWNER barvea_app'
+  WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname='barvea')\gexec
+SQLEOF
+  vm_put "$ip" "$SQL" /tmp/pg-init.sql
+  rm -f "$SQL"
+  vm_ssh "$ip" "sudo -u postgres psql -v ON_ERROR_STOP=1 -f /tmp/pg-init.sql && rm -f /tmp/pg-init.sql"
   # TODO tuning (świadomie stock jak prod): shared_buffers itd. — osobna decyzja
 }
 
