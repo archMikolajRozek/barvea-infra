@@ -49,12 +49,13 @@ CREDS=/root/barvea-bootstrap-creds.txt
 KEY=/root/.ssh/barvea-bootstrap           # klucz do VM-ek (cloud-init)
 
 # guest defs: id name ip cores mem(MB) balloon disk rola
-if [ "$PRESET" = staging ]; then    # małe goście — test/staging (VM-w-VM)
+if [ "$PRESET" = staging ]; then    # małe goście — test/staging (VM-w-VM,
+  # suma RAM ~10G → mieści się w 12G nested-hoście z zapasem na PVE)
   GUESTS_LXC=( "200 vault    ${LAN}.50 1 1024 - 6  vault"
-               "201 storage  ${LAN}.40 2 3072 - 10 storage" )
+               "201 storage  ${LAN}.40 2 2048 - 10 storage" )
   GUESTS_VM=(  "100 barvea-infra ${LAN}.10 1 1024 -    20 infra 1"
-               "101 barvea-data  ${LAN}.20 2 4096 -    40 data  2"
-               "102 barvea-app   ${LAN}.30 2 4096 -    30 app   3" )
+               "101 barvea-data  ${LAN}.20 2 3072 -    40 data  2"
+               "102 barvea-app   ${LAN}.30 2 3072 -    30 app   3" )
 else
   GUESTS_LXC=( "200 vault    ${LAN}.50 2 2048 - 8  vault"
                "201 storage  ${LAN}.40 4 8192 - 16 storage" )
