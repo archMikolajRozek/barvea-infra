@@ -49,7 +49,13 @@ CREDS=/root/barvea-bootstrap-creds.txt
 KEY=/root/.ssh/barvea-bootstrap           # klucz do VM-ek (cloud-init)
 
 # guest defs: id name ip cores mem(MB) balloon disk rola
-if [ "$PRESET" = staging ]; then    # małe goście — test/staging (VM-w-VM,
+if [ "$PRESET" = compact ]; then    # 1-VM all-in-one (dedyk mały klient):
+  # DB/redis/minio = KONTENERY w bundlu dedyk (compose), NIE osobne goście.
+  # Vault/Samba/WG pomijane — bez modułu drive + licencja weryfikowana
+  # in-app (pubkey hardcode, nie potrzebuje Vaulta). ⚠️ NIETESTOWANE.
+  GUESTS_LXC=( )
+  GUESTS_VM=(  "102 barvea-app ${LAN}.30 4 8192 - 120 app 1" )
+elif [ "$PRESET" = staging ]; then  # małe goście — test/staging (VM-w-VM,
   # suma RAM ~10G → mieści się w 12G nested-hoście z zapasem na PVE)
   GUESTS_LXC=( "200 vault    ${LAN}.50 1 1024 - 6  vault"
                "201 storage  ${LAN}.40 2 2048 - 10 storage" )
@@ -361,6 +367,11 @@ svc_app() {    # VM 102 — docker + szkielet; DEPLOY APLIKACJI = bundle/deploy.
 }
 
 phase_services() {
+  if [ "$PRESET" = compact ]; then   # 1-VM: tylko app (reszta = kontenery bundla)
+      log "USŁUGI: compact (1-VM) — tylko app; DB/redis/minio z bundla dedyk"
+      done_f svc_app || { svc_app; mark svc_app; }
+      mark services; return
+  fi
   log "USŁUGI: VM 100 (WG hub)";     done_f svc_infra   || { svc_infra;   mark svc_infra; }
   log "USŁUGI: VM 101 (Postgres)";   done_f svc_data    || { svc_data;    mark svc_data; }
   log "USŁUGI: LXC 200 (Vault)";     done_f svc_vault   || { svc_vault;   mark svc_vault; }
