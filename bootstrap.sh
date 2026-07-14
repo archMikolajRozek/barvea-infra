@@ -30,6 +30,16 @@ PVE_STORAGE="${PVE_STORAGE:-hdd-pool}"    # id storage Proxmoxa nad poolem
 LAN="${LAN:-10.10.0}"                     # /24 prefix
 BR_PUB="${BR_PUB:-vmbr0}"; BR_LAN="${BR_LAN:-vmbr1}"
 SSH_PORT="${SSH_PORT:-2277}"
+PRESET="${PRESET:-prod}"                  # prod|staging (staging = małe goście)
+# WG — PARAMETRYZOWANE (kolizje z siecią klienta/prodem! kreator pyta,
+# preflight sprawdza). Defaulty = prod. Staging przykład: 10.68/16, 10.19/24,
+# porty 51920/51921.
+WG_USERS_CIDR="${WG_USERS_CIDR:-10.67.0.0/16}"
+WG_USERS_ADDR="${WG_USERS_ADDR:-10.67.0.1/16}"
+WG_USERS_PORT="${WG_USERS_PORT:-51821}"
+WG0_CIDR="${WG0_CIDR:-10.9.0.0/24}"
+WG0_ADDR="${WG0_ADDR:-10.9.0.1/24}"
+WG0_PORT="${WG0_PORT:-51820}"
 ASSETS_DIR="${ASSETS_DIR:-}"              # air-gap: katalog artefaktów
 LXC_TEMPLATE="${LXC_TEMPLATE:-debian-13-standard}"   # pveam nazwa-prefix
 CLOUD_IMG_URL="${CLOUD_IMG_URL:-https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-amd64.qcow2}"
@@ -39,11 +49,19 @@ CREDS=/root/barvea-bootstrap-creds.txt
 KEY=/root/.ssh/barvea-bootstrap           # klucz do VM-ek (cloud-init)
 
 # guest defs: id name ip cores mem(MB) balloon disk rola
-GUESTS_LXC=( "200 vault    ${LAN}.50 2 2048 - 8  vault"
-             "201 storage  ${LAN}.40 4 8192 - 16 storage" )
-GUESTS_VM=(  "100 barvea-infra ${LAN}.10 2 4096  -    50  infra 1"
-             "101 barvea-data  ${LAN}.20 4 24576 8192 200 data  2"
-             "102 barvea-app   ${LAN}.30 4 8192  4096 80  app   3" )
+if [ "$PRESET" = staging ]; then    # małe goście — test/staging (VM-w-VM)
+  GUESTS_LXC=( "200 vault    ${LAN}.50 1 1024 - 6  vault"
+               "201 storage  ${LAN}.40 2 3072 - 10 storage" )
+  GUESTS_VM=(  "100 barvea-infra ${LAN}.10 1 1024 -    20 infra 1"
+               "101 barvea-data  ${LAN}.20 2 4096 -    40 data  2"
+               "102 barvea-app   ${LAN}.30 2 4096 -    30 app   3" )
+else
+  GUESTS_LXC=( "200 vault    ${LAN}.50 2 2048 - 8  vault"
+               "201 storage  ${LAN}.40 4 8192 - 16 storage" )
+  GUESTS_VM=(  "100 barvea-infra ${LAN}.10 2 4096  -    50  infra 1"
+               "101 barvea-data  ${LAN}.20 4 24576 8192 200 data  2"
+               "102 barvea-app   ${LAN}.30 4 8192  4096 80  app   3" )
+fi
 
 # ── helpers ─────────────────────────────────────────────────────────
 log()  { printf '\n\033[1;36m── %s\033[0m\n' "$*"; }
@@ -80,6 +98,12 @@ phase_preflight() {
   if ! zpool list "$POOL_NAME" >/dev/null 2>&1; then
       [ -n "$POOL_DISKS" ] || die "pool $POOL_NAME nie istnieje — ustaw POOL_DISKS w bootstrap.conf"
   fi
+  # kolizje podsieci (LAN klienta/prod vs nasze) — FORCE_NETS=1 wymusza
+  for net in "${LAN}.0/24" "$WG_USERS_CIDR" "$WG0_CIDR"; do
+      if ip route | grep -qw "$net" && [ "${FORCE_NETS:-0}" != 1 ]; then
+          die "podsieć $net JUŻ w tablicy routingu (kolizja!) — zmień w bootstrap.conf albo FORCE_NETS=1"
+      fi
+  done
   touch "$CREDS"; chmod 600 "$CREDS"
   mark preflight
 }
@@ -111,7 +135,10 @@ EOF
   fi
 
   log "HOST: nftables + fail2ban + sanoid + zfs-load-org"
-  install -m 644 "$REPO_DIR/network/host-nftables.conf" /etc/nftables.conf
+  # template ma literały proda (10.10.0.*, 51820/51821) → podstaw parametry
+  sed -e "s|10\.10\.0\.|${LAN}.|g" -e "s|51821|$WG_USERS_PORT|g" \
+      -e "s|51820|$WG0_PORT|g" \
+      "$REPO_DIR/network/host-nftables.conf" > /etc/nftables.conf
   systemctl enable --now nftables
   DEBIAN_FRONTEND=noninteractive apt-get install -y fail2ban sanoid jq >/dev/null
   install -m 644 "$REPO_DIR/network/host-fail2ban-jail.local" /etc/fail2ban/jail.local
@@ -194,9 +221,14 @@ svc_infra() {  # VM 100 — WG hub + wg-provisiond
     [ -f server_private.key ] || { wg genkey | tee server_private.key | wg pubkey > server_public.key; }
     [ -f wg0_private.key ]    || { wg genkey | tee wg0_private.key    | wg pubkey > wg0_public.key; }"
   local T=/tmp/.wg.$$
-  sed "s|__WG_USERS_SERVER_PRIVATE_KEY__|$(vm_ssh "$ip" 'cat /etc/wireguard/server_private.key')|" \
+  # template'y = literały proda → podstaw parametry sieci (kolizje!)
+  sed -e "s|__WG_USERS_SERVER_PRIVATE_KEY__|$(vm_ssh "$ip" 'cat /etc/wireguard/server_private.key')|" \
+      -e "s|10\.67\.0\.0/16|$WG_USERS_CIDR|g" -e "s|10\.67\.0\.1/16|$WG_USERS_ADDR|" \
+      -e "s|51821|$WG_USERS_PORT|" -e "s|10\.10\.0\.|${LAN}.|g" \
       "$REPO_DIR/network/wg-users.conf.template" > "$T"; vm_put "$ip" "$T" /etc/wireguard/wg-users.conf
-  sed "s|__WG0_SERVER_PRIVATE_KEY__|$(vm_ssh "$ip" 'cat /etc/wireguard/wg0_private.key')|" \
+  sed -e "s|__WG0_SERVER_PRIVATE_KEY__|$(vm_ssh "$ip" 'cat /etc/wireguard/wg0_private.key')|" \
+      -e "s|10\.9\.0\.0/24|$WG0_CIDR|g" -e "s|10\.9\.0\.1/24|$WG0_ADDR|" \
+      -e "s|51820|$WG0_PORT|" \
       "$REPO_DIR/network/wg0.conf.template" > "$T"; vm_put "$ip" "$T" /etc/wireguard/wg0.conf; rm -f "$T"
   vm_put "$ip" "$REPO_DIR/wg-control/wg-provisiond.py" /usr/local/sbin/wg-provisiond.py
   vm_put "$ip" "$REPO_DIR/wg-control/wg-provisiond.service" /etc/systemd/system/wg-provisiond.service
