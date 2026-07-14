@@ -119,8 +119,11 @@ phase_host() {
   zfs set compression=lz4 atime=off xattr=sa acltype=posix "$POOL_NAME"
   zfs list "$POOL_NAME/orgs" >/dev/null 2>&1 || zfs create "$POOL_NAME/orgs"
   zfs set compression=zstd "$POOL_NAME/orgs"
+  # sparse=1 (thin): zvole bez refreservation — inaczej suma dysków gości
+  # musi zmieścić się w poolu Z GÓRY (run1 staging: resize 101 padł na
+  # mirror 60G). Trade: pilnować zapełnienia poola (zfs list).
   pvesm status 2>/dev/null | grep -q "^$PVE_STORAGE " || \
-      pvesm add zfspool "$PVE_STORAGE" --pool "$POOL_NAME"
+      pvesm add zfspool "$PVE_STORAGE" --pool "$POOL_NAME" --sparse 1
 
   log "HOST: mostek LAN $BR_LAN"
   if ! grep -q "iface $BR_LAN" /etc/network/interfaces /etc/network/interfaces.d/* 2>/dev/null; then
@@ -215,6 +218,10 @@ phase_guests() {
       qm importdisk "$id" "$IMG" "$PVE_STORAGE" >/dev/null
       qm set "$id" -scsi0 "$PVE_STORAGE:vm-$id-disk-0,cache=writeback,discard=on,iothread=1"
       qm resize "$id" scsi0 "${disk}G"
+      # qm resize potrafi zwrócić 0 mimo "zfs error: size greater than
+      # available space" (run1 staging) — twarda weryfikacja volsize:
+      local vs; vs=$(zfs get -H -o value volsize "$POOL_NAME/vm-$id-disk-0" 2>/dev/null || echo 0)
+      [ "$vs" = "${disk}G" ] || die "VM $id: dysk $vs zamiast ${disk}G (pool pełny? sparse?)"
       qm set "$id" -ide2 "$PVE_STORAGE:cloudinit" -boot order=scsi0 \
           -ciuser "$CI_USER" -sshkeys "$KEY.pub" \
           -ipconfig0 "ip=$ip/24,gw=${LAN}.1" -nameserver "1.1.1.1 1.0.0.1"
