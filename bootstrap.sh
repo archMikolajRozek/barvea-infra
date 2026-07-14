@@ -238,7 +238,8 @@ phase_guests() {
 # ═══ FAZA: usługi per węzeł ═════════════════════════════════════════
 svc_infra() {  # VM 100 — WG hub + wg-provisiond
   local ip="${LAN}.10"
-  vm_ssh "$ip" "DEBIAN_FRONTEND=noninteractive apt-get install -y wireguard iptables python3 >/dev/null
+  # nftables: PostUp wg0 (tabela wg_nat) — cloud-image go NIE ma (run3 staging)
+  vm_ssh "$ip" "DEBIAN_FRONTEND=noninteractive apt-get install -y wireguard iptables nftables python3 >/dev/null
     sysctl -w net.ipv4.ip_forward=1; echo net.ipv4.ip_forward=1 > /etc/sysctl.d/99-wg.conf
     umask 077; cd /etc/wireguard
     [ -f server_private.key ] || { wg genkey | tee server_private.key | wg pubkey > server_public.key; }
