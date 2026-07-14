@@ -146,6 +146,9 @@ have_key audit-key-derive        || vault write -f transit/keys/audit-key-derive
 have_key jwt-signing             || vault write -f transit/keys/jwt-signing type=ecdsa-p256
 have_key update-manifest-ed25519 || vault write -f transit/keys/update-manifest-ed25519 type=ed25519
 have_key wdac-policy-ed25519     || vault write -f transit/keys/wdac-policy-ed25519 type=ed25519
+have_key license-ed25519         || vault write -f transit/keys/license-ed25519 type=ed25519
+# license-ed25519 (2026-07-14): podpisywanie licencji dedyk (gen-license przez
+# transit sign; public key HARDCODE w obrazie APP). Non-exportable jak reszta.
 # (test-key z proda pominięty celowo — artefakt testowy)
 
 # ── 7. Audit (prod MA od 2026-07-10: file audit + logrotate
