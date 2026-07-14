@@ -23,36 +23,38 @@ APP_SRC="${1:?podaj katalog źródeł aplikacji (checkout repo APP)}"
 VERSION="${2:?podaj wersję, np. 2026.07.14}"
 OUT="${3:-./barvea-assets/bundle}"
 
-# CONFIRM(APP): pin obrazów bazowych (APP: postgres:18 [K2], redis:7-alpine,
-# minio:<pin z prod: docker images|grep minio>). dwg-converter = build z repo.
+# Obrazy bazowe (APP CONFIRM 2026-07-14: postgres:18 [K2], redis:7-alpine).
+# minio: pin z proda — auto-detect z żywego kontenera barvea-minio (uruchamiaj
+# na maszynie z dostępem do proda, np. barvea-app), albo podaj MINIO_IMAGE=.
 PG_IMAGE="${PG_IMAGE:-postgres:18}"
 REDIS_IMAGE="${REDIS_IMAGE:-redis:7-alpine}"
-MINIO_IMAGE="${MINIO_IMAGE:-minio/minio:RELEASE.2025-01-01T00-00-00Z}"  # CONFIRM(APP) realny pin
-APP_IMAGE="barvea-app:$VERSION"
+MINIO_IMAGE="${MINIO_IMAGE:-$(docker inspect barvea-minio --format '{{.Config.Image}}' 2>/dev/null || true)}"
+APP_IMAGE="barvea-app:$VERSION"       # VERSION = TAG obrazu (nie build-arg; APP)
 DWG_IMAGE="barvea-dwg-converter:$VERSION"
 
 log() { printf '\n\033[1;36m── %s\033[0m\n' "$*"; }
 die() { printf '\033[1;31mFATAL: %s\033[0m\n' "$*" >&2; exit 1; }
 command -v docker >/dev/null || die "docker wymagany"
 [ -d "$APP_SRC" ] || die "brak APP_SRC: $APP_SRC"
+[ -f "$APP_SRC/Dockerfile" ] || die "brak $APP_SRC/Dockerfile (root repo app)"
+[ -n "$MINIO_IMAGE" ] || die "MINIO_IMAGE nieustawione i brak kontenera barvea-minio — podaj MINIO_IMAGE=minio/minio:<pin>"
 mkdir -p "$OUT"
 
-# ── 1. Build obrazu app (NEXT_PUBLIC w BUILD-ARG — krytyczne!) ──────
+# ── 1. Build obrazu app — TYLKO build-arg NEXT_PUBLIC_DEPLOYMENT_MODE
+#      (Next inline'uje w build; default ""=saas). Dockerfile=root, kontekst=root.
+#      VERSION = tag obrazu, NIE build-arg (APP CONFIRM). ──
 log "build $APP_IMAGE (NEXT_PUBLIC_DEPLOYMENT_MODE=dedicated inline)"
-# CONFIRM(APP): ścieżka Dockerfile aplikacji (zakładam $APP_SRC z Dockerfile).
 docker build \
   --build-arg NEXT_PUBLIC_DEPLOYMENT_MODE=dedicated \
-  --build-arg BARVEA_VERSION="$VERSION" \
   -t "$APP_IMAGE" \
   "$APP_SRC"
 
-# ── 2. dwg-converter (osobny kontener; CONFIRM ścieżka) ────────────
-if [ -d "$APP_SRC/docker/dwg-converter" ]; then
+# ── 2. dwg-converter (kontekst = docker/dwg-converter/; APP CONFIRM) ─
+if [ -f "$APP_SRC/docker/dwg-converter/Dockerfile" ]; then
   log "build $DWG_IMAGE"
-  docker build -t "$DWG_IMAGE" "$APP_SRC/docker/dwg-converter"   # CONFIRM(APP) ścieżka
+  docker build -t "$DWG_IMAGE" "$APP_SRC/docker/dwg-converter"
 else
-  echo "  ⚠️ brak docker/dwg-converter w źródłach — pomijam (CONFIRM z APP)"
-  DWG_IMAGE=""
+  die "brak $APP_SRC/docker/dwg-converter/Dockerfile"
 fi
 
 # ── 3. Pull obrazów bazowych (dla air-gap = zapisane w images.tar) ─
@@ -67,18 +69,15 @@ log "docker save → images.tar"
 docker save $APP_IMAGE $DWG_IMAGE "$PG_IMAGE" "$REDIS_IMAGE" "$MINIO_IMAGE" \
   -o "$OUT/images.tar"
 
-# ── 5. Compose + env-template + scripts z repo APP ─────────────────
-log "compose + env-template + scripts (deploy/dedicated/ od APP)"
-DD="$APP_SRC/deploy/dedicated"   # CONFIRM(APP): to ścieżka z ich #4
-if [ -d "$DD" ]; then
-  cp "$DD/compose.dedicated.yml" "$OUT/" 2>/dev/null || \
-    cp "$DD"/compose*.yml "$OUT/compose.dedicated.yml"
-  cp "$DD/env.template" "$OUT/" 2>/dev/null || cp "$DD"/*.env.template "$OUT/env.template"
-else
-  echo "  ⚠️ brak $DD — skopiuj compose.dedicated.yml + env.template ręcznie (CONFIRM z APP)"
-fi
+# ── 5. Compose + env-template z repo APP (ścieżki APP CONFIRM) ─────
+log "compose + env-template (deploy/dedicated/ od APP)"
+DD="$APP_SRC/deploy/dedicated"
+[ -f "$DD/docker-compose.dedicated.yml" ] || die "brak $DD/docker-compose.dedicated.yml"
+[ -f "$DD/.env.dedicated.template" ] || die "brak $DD/.env.dedicated.template (DOTFILE!)"
+cp "$DD/docker-compose.dedicated.yml" "$OUT/compose.dedicated.yml"
+cp "$DD/.env.dedicated.template" "$OUT/env.template"   # dotfile → env.template (nazwa deploy-app)
 # scripts/{bootstrap-instance,apply-license}.ts są W OBRAZIE app (exec npx tsx),
-# nie kopiujemy osobno — deploy-app woła je przez `compose exec app npx tsx ...`.
+# nie kopiujemy osobno — deploy-app woła `compose exec app npx tsx ...`.
 
 # ── 6. MANIFEST + (opcja) podpis update-manifest-ed25519 ───────────
 log "manifest"
@@ -93,16 +92,19 @@ log "manifest"
 cat "$OUT/MANIFEST.txt"
 
 if [ "${SIGN:-0}" = 1 ]; then
-  # podpis manifestu przez Vault transit update-manifest-ed25519 (updater
-  # klienta weryfikuje + sprawdza buildDate vs licencja.updatesUntil).
-  # Wymaga VAULT_ADDR+VAULT_TOKEN. CONFIRM format z APP (updater).
+  # Podpis manifestu = W CAŁOŚCI NASZE (APP CONFIRM (d): APP NIE ma updatera,
+  # nie weryfikuje żadnego manifestu). Podpis I weryfikacja = nasz bundle-
+  # -updater (do napisania). update-manifest-ed25519 = SIGN-helper (ten sam
+  # klucz co auto-update WPF BarveaDrive). Format = jak licencja (payload
+  # b64url + ed25519 po bajtach ASCII segmentu) — nasz updater sprawdzi też
+  # buildDate vs licencja.updatesUntil. Wymaga VAULT_ADDR+VAULT_TOKEN.
   IN=$(base64 -w0 "$OUT/MANIFEST.txt")
-  SIG=$(curl -fsSk -H "X-Vault-Token: $VAULT_TOKEN" \
-    --data "{\"input\":\"$IN\"}" \
+  SIG=$(curl -fsS --cacert "${VAULT_CACERT:-/opt/vault/tls/tls.crt}" \
+    -H "X-Vault-Token: $VAULT_TOKEN" --data "{\"input\":\"$IN\"}" \
     "$VAULT_ADDR/v1/transit/sign/update-manifest-ed25519" \
     | grep -oP '(?<="signature":")[^"]+')
   echo "$SIG" > "$OUT/MANIFEST.sig"
-  echo "  podpisano (update-manifest-ed25519)"
+  echo "  podpisano (update-manifest-ed25519) — weryfikacja: nasz updater"
 fi
 
 log "DONE → $OUT (images.tar + compose + env.template + MANIFEST)"
