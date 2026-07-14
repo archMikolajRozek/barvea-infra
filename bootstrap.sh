@@ -275,7 +275,8 @@ host  barvea  barvea_app    ${LAN}.0/24   scram-sha-256
 host  all     barvea_admin  10.9.0.0/24   scram-sha-256
 host  all     postgres      10.9.0.0/24   scram-sha-256
 HBA
-    sed -i \"s/^#\\?listen_addresses.*/listen_addresses = 'localhost,$ip'/\" \$PGC/postgresql.conf
+    mkdir -p \$PGC/conf.d
+    printf \"listen_addresses = \\047localhost,$ip\\047\\n\" > \$PGC/conf.d/barvea.conf
     systemctl restart postgresql@18-main
     sudo -u postgres psql -tc \"SELECT 1 FROM pg_roles WHERE rolname='barvea_app'\" | grep -q 1 || \
         sudo -u postgres psql -c \"CREATE ROLE barvea_app LOGIN PASSWORD '$PGA'\"
