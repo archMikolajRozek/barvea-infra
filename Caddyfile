@@ -96,12 +96,45 @@ barvea.com {
         }
     }
 
-    # ─── Large file uploads (IFC up to 500 MB, batch CDE up to 1 GB) ───
+    # ─── Long-running server work (small request, long response) ───
+    # Finalizacja uploadu kawałkowego (strumień setek GB z tmp na ZFS) i build
+    # tomu PDF potrafią liczyć się dziesiątki minut — default 120s je ucinał.
+    @longops path \
+        /api/v1/orgs/*/projects/*/documents/uploads/*/complete \
+        /api/v1/orgs/*/projects/*/volumes/*/build
+    handle @longops {
+        request_body {
+            max_size 10MB
+        }
+        reverse_proxy app:3005 {
+            transport http {
+                read_timeout 7200s
+                write_timeout 7200s
+                dial_timeout 30s
+            }
+            header_up X-Real-IP {client_ip}
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+        }
+    }
+
+    # ─── Large file uploads (single-POST ≤1 GB; chunked = 32 MB per request) ───
+    # UWAGA: Caddy `path /foo/*` NIE łapie gołego `/foo` — a upload CDE leci
+    # POST-em na goły `.../documents`, upload IFC na goły `.../ifc`. Przez ten
+    # brak requesty wpadały do domyślnego handlera z timeoutem 120 s i duże
+    # pliki na wolniejszym łączu były ucinane w połowie body (Firefox:
+    # "NetworkError when attempting to fetch resource").
+    # `*` łapie JEDEN segment ścieżki — chunk PUT (…/documents/uploads/<id>)
+    # ma dwa segmenty po /documents i potrzebuje własnego wzorca.
     @uploads path \
+        /api/v1/orgs/*/projects/*/documents \
         /api/v1/orgs/*/projects/*/documents/* \
-        /api/v1/orgs/*/projects/*/ifc-models* \
+        /api/v1/orgs/*/projects/*/documents/uploads/* \
+        /api/v1/orgs/*/projects/*/ifc \
+        /api/v1/orgs/*/projects/*/ifc/* \
         /api/v1/orgs/*/projects/*/assets/*/documents \
-        /api/v1/orgs/*/projects/*/combined-models*
+        /api/v1/orgs/*/projects/*/combined-models* \
+        /api/v1/plugin/projects/*/cde/upload
     handle @uploads {
         request_body {
             max_size 1GB

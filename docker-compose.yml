@@ -31,6 +31,12 @@ services:
       HOSTNAME: "0.0.0.0"
       NEXT_TELEMETRY_DISABLED: "1"
       DWG_CONVERTER_URL: "http://dwg-converter:8080"
+      # Upload kawałkowy: kawałki lądują tu do czasu finalizacji. Wolumen MUSI
+      # mieć miejsce na największe pliki (chmury punktów = setki GB) — w razie
+      # potrzeby podmień named volume na bind-mount na dużym dysku.
+      UPLOAD_TMP_DIR: "/upload-tmp"
+    volumes:
+      - upload_tmp:/upload-tmp
     networks:
       - barvea_web
     depends_on:
@@ -124,3 +130,5 @@ volumes:
     name: barvea_caddy_data
   caddy_config:
     name: barvea_caddy_config
+  upload_tmp:
+    name: barvea_upload_tmp
