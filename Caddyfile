@@ -1,6 +1,8 @@
 # BARVEA — Caddy 2 production config
 #
-# Public domains: barvea.com (apex) + www.barvea.com (canonical redirect to apex)
+# Public domains: barvea.com (apex) + app.barvea.com (alias, SAME block —
+# przejściowo dual-served dopóki barvea.com nie przełączy się na osobny CMS
+# biura architektonicznego) + www.barvea.com (canonical redirect to apex)
 # TLS: auto via Let's Encrypt (HTTP-01 challenge over port 80)
 # Backend: app:3005 (Next.js standalone, internal Docker network)
 #
@@ -27,9 +29,9 @@
 }
 
 # ═══════════════════════════════════════════════════════════════
-# barvea.com — primary
+# barvea.com — primary (+ app.barvea.com jako alias, patrz komentarz wyżej)
 # ═══════════════════════════════════════════════════════════════
-barvea.com {
+barvea.com, app.barvea.com {
     encode zstd gzip
 
     # ─── mTLS for Drive client (optional — mode=request) ───
