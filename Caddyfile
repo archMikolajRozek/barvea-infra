@@ -1,8 +1,11 @@
 # BARVEA — Caddy 2 production config
 #
-# Public domains: barvea.com (apex) + app.barvea.com (alias, SAME block —
-# przejściowo dual-served dopóki barvea.com nie przełączy się na osobny CMS
-# biura architektonicznego) + www.barvea.com (canonical redirect to apex)
+# Public domain: app.barvea.com (SaaS product — CDE/BIM/FM/CMMS panel).
+# barvea.com/www.barvea.com PRZEŁĄCZONE 2026-07-28 na osobny CMS biura
+# architektonicznego (DNS na innym hostingu) — Caddy/Hetzner już ich nie
+# serwuje. www block niżej zostaje jako harmless no-op (redir celuje w
+# {uri} na bieżącym DNS barvea.com, więc trafia poprawnie na CMS niezależnie
+# od tego czy w ogóle jest wywoływany).
 # TLS: auto via Let's Encrypt (HTTP-01 challenge over port 80)
 # Backend: app:3005 (Next.js standalone, internal Docker network)
 #
@@ -29,9 +32,9 @@
 }
 
 # ═══════════════════════════════════════════════════════════════
-# barvea.com — primary (+ app.barvea.com jako alias, patrz komentarz wyżej)
+# app.barvea.com — primary (barvea.com zdjęty 2026-07-28, patrz wyżej)
 # ═══════════════════════════════════════════════════════════════
-barvea.com, app.barvea.com {
+app.barvea.com {
     encode zstd gzip
 
     # ─── mTLS for Drive client (optional — mode=request) ───
