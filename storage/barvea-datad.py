@@ -61,7 +61,11 @@ def load_cfg():
     if len(cfg.get("SIGN_KEY", "")) < 24:
         log("FATAL: SIGN_KEY brak/za krótki w " + CONF)
         sys.exit(1)
-    cfg.setdefault("PUBLIC_DL_BASE", "https://barvea.com")
+    # public host dla podpisanych URL-i /dl/ — MUSI = domena appki (same-origin
+    # dla fetch-owych pobrań). Cutover 2026-07-28: barvea.com→app.barvea.com
+    # (barvea.com = CMS biura, tylko redirect; poleganie na nim = kruche).
+    # Nadpisywalne w /etc/barvea/barvea-datad.env (PUBLIC_DL_BASE=).
+    cfg.setdefault("PUBLIC_DL_BASE", "https://app.barvea.com")
     cfg.setdefault("DL_TTL", "900")
     return cfg
 
