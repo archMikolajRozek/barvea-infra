@@ -130,7 +130,8 @@ done
 # ─── 6. Smoke test ───
 echo ">>> Smoke test..."
 sleep 3
-HTTP_CODE=$(curl -sk -o /dev/null -w "%{http_code}" https://barvea.com/api/health)
+# app.barvea.com od cutover 2026-07-28 (barvea.com = CMS biura, zwraca 301)
+HTTP_CODE=$(curl -sk -o /dev/null -w "%{http_code}" https://app.barvea.com/api/health)
 if [[ "$HTTP_CODE" != "200" ]]; then
   echo "FAIL: /api/health returned $HTTP_CODE"
   exit 1
