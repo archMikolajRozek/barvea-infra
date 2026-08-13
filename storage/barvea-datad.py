@@ -166,6 +166,37 @@ def dl_verify(token):
         return None
 
 
+def parse_range(header, size):
+    """Parse a Range header for a file of `size` bytes. Single range only:
+    bytes=start-, bytes=start-end, bytes=-suffix. Returns:
+      (start, end)      inclusive byte offsets → serve 206
+      "unsatisfiable"   valid syntax but outside the file → serve 416
+      None              absent / malformed / multi-range → ignore, serve 200
+    """
+    if not header:
+        return None
+    m = re.match(r"^bytes=(\d*)-(\d*)$", header.strip())
+    if not m or (m.group(1) == "" and m.group(2) == ""):
+        # multi-range (commas), non-bytes unit, garbage, or "bytes=-":
+        # per RFC 7233 an unparsable Range is ignored → full 200
+        return None
+    s, e = m.group(1), m.group(2)
+    if s == "":
+        # suffix range: last <e> bytes of the file
+        n = int(e)
+        if n == 0 or size == 0:
+            return "unsatisfiable"
+        return max(size - n, 0), size - 1
+    start = int(s)
+    if start >= size:
+        return "unsatisfiable"
+    end = min(int(e), size - 1) if e else size - 1
+    if end < start:
+        # last-byte-pos < first-byte-pos is invalid → ignore, full 200
+        return None
+    return start, end
+
+
 # ── journal ────────────────────────────────────────────────────
 def journal_paths(org_id):
     d = os.path.join(STATE, "journal")
@@ -539,6 +570,8 @@ class Handler(BaseHTTPRequestHandler):
                          INLINE_MIME[ext] if inline
                          else "application/octet-stream")
         self.send_header("Content-Length", str(st.st_size))
+        # advertise resumability to download managers probing via HEAD
+        self.send_header("Accept-Ranges", "bytes")
         self.end_headers()
 
     def do_GET(self):
@@ -563,15 +596,56 @@ class Handler(BaseHTTPRequestHandler):
                     ctype, disp = INLINE_MIME[ext], "inline"
                 else:
                     ctype, disp = "application/octet-stream", "attachment"
-                self.send_response(200)
+                # Range support so browser download managers can pause/
+                # resume big files. If-Range present → full 200 on purpose:
+                # we expose no stable validator (ETag) and WIP files are
+                # mutable — a conditional resume could stitch two versions
+                # of the file together; a full restart is the safe answer.
+                rng = None
+                if "If-Range" not in self.headers:
+                    rng = parse_range(self.headers.get("Range"), st.st_size)
+                if rng == "unsatisfiable":
+                    log(f"deny 416 GET {self.path[:120]} :: "
+                        "range_not_satisfiable")
+                    self.send_response(416)
+                    self.send_header("Content-Range",
+                                     f"bytes */{st.st_size}")
+                    self.send_header("Accept-Ranges", "bytes")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                if rng is not None:
+                    start, end = rng
+                    length = end - start + 1
+                else:
+                    start, length = 0, st.st_size
+                self.send_response(206 if rng is not None else 200)
                 self.send_header("Content-Type", ctype)
-                self.send_header("Content-Length", str(st.st_size))
+                self.send_header("Content-Length", str(length))
+                if rng is not None:
+                    self.send_header("Content-Range",
+                                     f"bytes {start}-{end}/{st.st_size}")
+                self.send_header("Accept-Ranges", "bytes")
                 self.send_header("Content-Disposition",
                                  f'{disp}; filename="{safe_name}"')
                 self.send_header("Cache-Control", "private, no-store")
                 self.end_headers()
                 with open(target, "rb") as f:
-                    shutil.copyfileobj(f, self.wfile, CHUNK)
+                    if rng is None:
+                        shutil.copyfileobj(f, self.wfile, CHUNK)
+                    else:
+                        f.seek(start)
+                        left = length
+                        while left > 0:
+                            chunk = f.read(min(CHUNK, left))
+                            if not chunk:
+                                # file shrank mid-stream (mutable WIP):
+                                # body is short vs Content-Length — drop
+                                # the connection so framing can't desync
+                                self.close_connection = True
+                                break
+                            self.wfile.write(chunk)
+                            left -= len(chunk)
             except BrokenPipeError:
                 self.close_connection = True
             except Exception as e:
