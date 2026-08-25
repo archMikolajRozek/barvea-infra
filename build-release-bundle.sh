@@ -31,6 +31,7 @@ REDIS_IMAGE="${REDIS_IMAGE:-redis:7-alpine}"
 MINIO_IMAGE="${MINIO_IMAGE:-$(docker inspect barvea-minio --format '{{.Config.Image}}' 2>/dev/null || true)}"
 APP_IMAGE="barvea-app:$VERSION"       # VERSION = TAG obrazu (nie build-arg; APP)
 DWG_IMAGE="barvea-dwg-converter:$VERSION"
+OFFICE_IMAGE="barvea-office-converter:$VERSION"
 
 log() { printf '\n\033[1;36m── %s\033[0m\n' "$*"; }
 die() { printf '\033[1;31mFATAL: %s\033[0m\n' "$*" >&2; exit 1; }
@@ -57,6 +58,18 @@ else
   die "brak $APP_SRC/docker/dwg-converter/Dockerfile"
 fi
 
+# ── 2b. office-converter (LibreOffice → PDF; kontekst = docker/office-converter/) ─
+#      UWAGA: obraz ~1.5 GB — bundle rośnie o tyle w images.tar.
+#      TODO APP: deploy/dedicated/docker-compose.dedicated.yml nie ma jeszcze
+#      serwisu office-converter ani OFFICE_CONVERTER_URL — dopóki go nie doda,
+#      obraz jedzie w bundlu, ale dedyk go nie uruchomi.
+if [ -f "$APP_SRC/docker/office-converter/Dockerfile" ]; then
+  log "build $OFFICE_IMAGE"
+  docker build -t "$OFFICE_IMAGE" "$APP_SRC/docker/office-converter"
+else
+  die "brak $APP_SRC/docker/office-converter/Dockerfile"
+fi
+
 # ── 3. Pull obrazów bazowych (dla air-gap = zapisane w images.tar) ─
 log "pull obrazów bazowych"
 for img in "$PG_IMAGE" "$REDIS_IMAGE" "$MINIO_IMAGE"; do
@@ -66,7 +79,7 @@ done
 # ── 4. docker save wszystkiego → images.tar ────────────────────────
 log "docker save → images.tar"
 # shellcheck disable=SC2086
-docker save $APP_IMAGE $DWG_IMAGE "$PG_IMAGE" "$REDIS_IMAGE" "$MINIO_IMAGE" \
+docker save $APP_IMAGE $DWG_IMAGE $OFFICE_IMAGE "$PG_IMAGE" "$REDIS_IMAGE" "$MINIO_IMAGE" \
   -o "$OUT/images.tar"
 
 # ── 5. Compose + env-template z repo APP (ścieżki APP CONFIRM) ─────
@@ -86,7 +99,7 @@ log "manifest"
   echo "version=$VERSION"
   echo "buildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"
   echo "deploymentMode=dedicated"
-  echo "images=$APP_IMAGE $DWG_IMAGE $PG_IMAGE $REDIS_IMAGE $MINIO_IMAGE"
+  echo "images=$APP_IMAGE $DWG_IMAGE $OFFICE_IMAGE $PG_IMAGE $REDIS_IMAGE $MINIO_IMAGE"
   echo "sha256(images.tar)=$(sha256sum "$OUT/images.tar" | cut -d' ' -f1)"
 } > "$OUT/MANIFEST.txt"
 cat "$OUT/MANIFEST.txt"

@@ -90,6 +90,10 @@ echo ">>> Building app image..."
 docker compose --env-file .env.production build app
 echo ">>> Building dwg-converter image..."
 docker compose --env-file .env.production build dwg-converter
+echo ">>> Building office-converter image..."
+# Pierwszy build ~1.5 GB obrazu (apt: LibreOffice) — kilka minut.
+# Kolejne deploye jada z cache warstw, o ile Dockerfile sie nie zmienil.
+docker compose --env-file .env.production build office-converter
 
 # ─── 3. Run migrations ───
 # Prisma CLI is installed at /opt/prisma-cli inside the runtime image (see
@@ -102,6 +106,8 @@ docker compose --env-file .env.production run --rm app prisma migrate deploy
 # ─── 4. Recreate containers ───
 echo ">>> Recreating dwg-converter container..."
 docker compose --env-file .env.production up -d --no-deps --force-recreate dwg-converter
+echo ">>> Recreating office-converter container..."
+docker compose --env-file .env.production up -d --no-deps --force-recreate office-converter
 echo ">>> Recreating app container..."
 docker compose --env-file .env.production up -d --no-deps --force-recreate app
 

@@ -51,7 +51,7 @@ scsi0: …,size=200G   scsi1: …,size=10T   (oba writeback+discard+iothread)
 scsihw: virtio-scsi-single / net0: virtio,bridge=vmbr1 / startup: order=2
 ```
 
-## VM 102 — barvea-app (10.10.0.30; Caddy+Next+Redis+dwg-converter)
+## VM 102 — barvea-app (10.10.0.30; Caddy+Next+Redis+dwg-converter+office-converter)
 ```
 q35 / cpu: host / cores: 4 / memory: 8192 balloon=4096 / agent: 1 / onboot: 1
 scsi0: hdd-pool:vm-102-disk-0,…,size=80G

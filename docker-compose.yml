@@ -31,6 +31,7 @@ services:
       HOSTNAME: "0.0.0.0"
       NEXT_TELEMETRY_DISABLED: "1"
       DWG_CONVERTER_URL: "http://dwg-converter:8080"
+      OFFICE_CONVERTER_URL: "http://office-converter:8080"
       # Upload kawałkowy: kawałki lądują tu do czasu finalizacji. Wolumen MUSI
       # mieć miejsce na największe pliki (chmury punktów = setki GB) — w razie
       # potrzeby podmień named volume na bind-mount na dużym dysku.
@@ -42,6 +43,12 @@ services:
     depends_on:
       dwg-converter:
         condition: service_healthy
+      # service_started, NIE _healthy: konwersja Office->PDF to funkcja
+      # poboczna. Gdyby LibreOffice nie wstal (np. po reboocie hosta),
+      # twardy warunek zablokowalby start CALEJ aplikacji. Aplikacja sama
+      # zwraca czytelny komunikat, gdy converter nie odpowiada.
+      office-converter:
+        condition: service_started
     healthcheck:
       # Force IPv4 — `localhost` resolves to ::1 (IPv6) in some Docker netconfigs,
       # and Next.js bound to 0.0.0.0 isn't always reachable on the IPv6 loopback.
@@ -85,6 +92,38 @@ services:
       timeout: 5s
       retries: 3
       start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+  # ───────────────────────────────────────────────────────────
+  # Office → PDF converter microservice
+  # LibreOffice headless (writer/calc/impress) za Flask+gunicorn.
+  # Przyjmuje doc/docx/xls/xlsx/ppt/pptx/odt/ods/odp/rtf, zwraca PDF
+  # do podgladu w przegladarce. Wewnetrzny — bez portu na hoscie.
+  # Uwaga: obraz ~1.5 GB (ubuntu + LibreOffice + fonty) — pierwszy build
+  # dlugi, kolejne z cache. soffice nie jest thread-safe: gunicorn jedzie
+  # na 2 PROCESACH, kazdy request ma wlasny profil (patrz server.py).
+  # ───────────────────────────────────────────────────────────
+  office-converter:
+    build:
+      context: ./app/docker/office-converter
+      dockerfile: Dockerfile
+    image: barvea-office-converter:latest
+    container_name: barvea-office-converter
+    restart: unless-stopped
+    networks:
+      - barvea_web
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      # LibreOffice startuje wolniej niz dwg-converter (wiekszy obraz,
+      # zimny cache stron) — 60 s zanim healthcheck zacznie liczyc bledy.
+      start_period: 60s
     logging:
       driver: json-file
       options:
