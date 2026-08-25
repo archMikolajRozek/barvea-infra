@@ -237,6 +237,52 @@ Add monitoring (UptimeRobot / Better Stack) to ping `https://barvea.com/api/heal
 
 ---
 
+## Skrypty ops/diag (TypeScript) na produkcji
+
+Skrypty z `app/scripts/*.ts` **nie odpalą się** w kontenerze `barvea-app`.
+Runtime image to Next standalone: ma `server.js`, `prisma/`, `scripts/`,
+`node_modules` — ale **nie ma katalogu `lib/`**, a każdy diag robi
+`import '../lib/prisma'`. `docker exec barvea-app npx tsx scripts/X.ts`
+kończy się `Cannot find module '../lib/prisma'`. `tsx` nie jest też w
+`package.json` (żadna zależność) — `npx` musi go dociągnąć z rejestru.
+
+Działa uruchomienie w stage **`builder`** — tam jest pełne źródło + komplet
+`node_modules`. Warstwy są w cache po deployu, więc build trwa sekundy:
+
+```bash
+cd ~/barvea
+docker build --target builder -t barvea-diag:latest ./app
+
+# DATABASE_URL podajemy przez shell, NIE przez --env-file:
+# .env.production ma wartości w apostrofach; `docker compose` je zdejmuje,
+# gołe `docker run --env-file` NIE — Prisma dostaje URL zaczynający się od '
+# i pada na "URL must start with the protocol postgresql://".
+set -a && . ./.env.production && set +a
+docker run --rm --network host -e DATABASE_URL="$DATABASE_URL"   barvea-diag:latest npx -y tsx scripts/<nazwa>.ts
+```
+
+`--network host` = ten sam wzorzec co rollback `pg_restore` w `deploy.sh`
+(bezpośredni dostęp do 10.10.0.20). Skrypty `*.mjs` z `scripts/` idą wprost
+w runtime image: `docker compose run --rm app node scripts/<x>.mjs`.
+
+---
+
+## Sprzątanie po dockerze (VM 102)
+
+Build cache rośnie z każdym deployem i **nikt go nie kasuje automatycznie**.
+2026-08-25 uzbierało się 51 GB cache (47.95 GB do odzyskania) — dysk 75 G był
+w 83%. Przed każdym większym buildem (albo cyklicznie):
+
+```bash
+df -h / && docker system df
+docker builder prune -f --filter until=168h   # zostaw cache z ostatniego tygodnia
+```
+
+Nie kasuj całego cache bez `--filter` bez potrzeby — następny build app
+leci wtedy od zera (npm ci + next build).
+
+---
+
 ## Troubleshooting
 
 **Caddy can't issue cert:** DNS not pointing to VM yet. Verify with `dig +short barvea.com` from external host. Caddy retries every 30 s.
