@@ -33,7 +33,11 @@ CONF = "/etc/barvea/barvea-datad.env"
 STATE = "/var/lib/barvea-data"
 ORG_BASE = "/srv/orgs"
 CONTAINERS = ("WIP", "Shared", "Published", "Archive")
-MAX_UPLOAD = 2 * 1024 * 1024 * 1024  # 2 GB
+# Limit POJEDYNCZEGO pliku. Nadpisywalny z "MAX_UPLOAD_GB" w pliku konfiguracyjnym
+# (patrz load_cfg) — daemon strumieniuje na dysk po 1 MB, wiec RAM nie jest
+# ograniczeniem; realnym limitem jest miejsce w puli ZFS. Podnoszac tu, podnies
+# tez DRIVE_MAX_FILE_BYTES w aplikacji, inaczej odrzuci plik wczesniej.
+MAX_UPLOAD = 2 * 1024 * 1024 * 1024  # 2 GB (domyslnie)
 CHUNK = 1024 * 1024
 LOCK = threading.Lock()      # journal + mutacje
 CFG = {}
@@ -46,6 +50,7 @@ def log(msg):
 
 
 def load_cfg():
+    global MAX_UPLOAD
     cfg = {"BIND": "10.10.0.40", "PORT": "8723"}
     with open(CONF) as f:
         for line in f:
@@ -61,6 +66,14 @@ def load_cfg():
     if len(cfg.get("SIGN_KEY", "")) < 24:
         log("FATAL: SIGN_KEY brak/za krótki w " + CONF)
         sys.exit(1)
+    # Limit pojedynczego pliku — skany i chmury punktów bija w domyslne 2 GB.
+    gb = cfg.get("MAX_UPLOAD_GB")
+    if gb:
+        try:
+            MAX_UPLOAD = int(float(gb) * 1024 * 1024 * 1024)
+            log("MAX_UPLOAD = %s GB" % gb)
+        except ValueError:
+            log("WARN: MAX_UPLOAD_GB nieczytelne (%r) — zostaje domyslne 2 GB" % gb)
     # public host dla podpisanych URL-i /dl/ — MUSI = domena appki (same-origin
     # dla fetch-owych pobrań). Cutover 2026-07-28: barvea.com→app.barvea.com
     # (barvea.com = CMS biura, tylko redirect; poleganie na nim = kruche).
@@ -292,7 +305,9 @@ def op_upload(handler, org_id, rel, request_id):
     if n < 0:
         return 411, {"error": "length_required"}
     if n > MAX_UPLOAD:
-        return 413, {"error": "too_large"}
+        # max_bytes w odpowiedzi — aplikacja pokazuje uzytkownikowi konkretny
+        # limit zamiast golego "za duzy plik".
+        return 413, {"error": "too_large", "max_bytes": MAX_UPLOAD}
     if is_locked(target):
         return 423, {"error": "locked"}
     existed = os.path.exists(target)
