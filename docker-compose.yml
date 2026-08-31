@@ -32,12 +32,19 @@ services:
       NEXT_TELEMETRY_DISABLED: "1"
       DWG_CONVERTER_URL: "http://dwg-converter:8080"
       OFFICE_CONVERTER_URL: "http://office-converter:8080"
-      # Upload kawałkowy: kawałki lądują tu do czasu finalizacji. Wolumen MUSI
-      # mieć miejsce na największe pliki (chmury punktów = setki GB) — w razie
-      # potrzeby podmień named volume na bind-mount na dużym dysku.
+      # Upload kawałkowy: kawałki lądują tu do czasu finalizacji (aplikacja
+      # skleja CAŁY plik lokalnie, bo datad ma tylko POST /files — bez offsetu
+      # i wznowień). Katalog MUSI pomieścić największe pliki (chmury punktów).
       UPLOAD_TMP_DIR: "/upload-tmp"
     volumes:
-      - upload_tmp:/upload-tmp
+      # 2026-08-31: bind-mount na dedykowanym dysku 1 TB (VM 102 /dev/sdb,
+      # LABEL=upload-tmp, ext4 -m 0 -T largefile4, scsi1 volblocksize=64k).
+      # Wcześniej named volume na dysku root 75 G — dzielił go z obrazami
+      # dockera i build cache (rośnie ~37 GB NA KAŻDY deploy), więc jeden
+      # upload kilkudziesięciu GB zapełniał root i kładł Next + Caddy.
+      # Katalog na hoście MUSI być chown 1001:1001 — bind-mount, w odróżnieniu
+      # od pustego named volume, NIE dziedziczy właściciela z obrazu (EACCES).
+      - /srv/upload-tmp:/upload-tmp
     networks:
       - barvea_web
     depends_on:
@@ -169,5 +176,3 @@ volumes:
     name: barvea_caddy_data
   caddy_config:
     name: barvea_caddy_config
-  upload_tmp:
-    name: barvea_upload_tmp

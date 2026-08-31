@@ -267,6 +267,42 @@ w runtime image: `docker compose run --rm app node scripts/<x>.mjs`.
 
 ---
 
+## Śluza uploadu — /srv/upload-tmp (VM 102)
+
+Upload kawałkowy **nie** leci prosto na ZFS. Trasa pliku:
+
+```
+przeglądarka → Caddy + Next (VM 102) → /upload-tmp  (cały plik sklejany lokalnie)
+                                          └─► POST /files → datad (LXC 201) → ZFS
+```
+
+Powód: `barvea-datad` przyjmuje wyłącznie cały plik (`POST /files`) — nie ma
+zapisu pod offsetem ani wznowień. Kawałki (32 MB) trzyma i skleja aplikacja,
+w `UPLOAD_TMP_DIR`. Sesja żyje 72 h od ostatniego kawałka, więc porzucone
+`.part` zajmują miejsce nawet trzy doby.
+
+Do 2026-08-31 był to named volume na dysku root (75 G), dzielony z obrazami
+dockera i build cachem. Jeden upload kilkudziesięciu GB zapełniał root i kładł
+Next + Caddy. Teraz osobny dysk:
+
+| | |
+|---|---|
+| Proxmox | `scsi1 = hdd-pool:vm-102-disk-1`, 1 TB, `volblocksize=64k` |
+| Gość | `/dev/sdb`, ext4 `-m 0 -T largefile4`, `LABEL=upload-tmp` |
+| Montaż | `/srv/upload-tmp`, fstab `defaults,noatime,nofail` |
+| Właściciel | **`chown 1001:1001`** — bind-mount nie dziedziczy właściciela z obrazu |
+
+`volblocksize=64k` nie jest ozdobnikiem: pula to **raidz2 na 4 dyskach**,
+przy domyślnym 8k blok zajmuje 24 KiB (efektywność ~33%), przy 64k ~48%.
+To samo tłumaczy `vm-102-disk-0`: dysk 80 G zajmuje w puli 331 G.
+Nowe zvole twórz ręcznie (`zfs create -V <size> -b 64k hddpool/vm-1XX-disk-N`),
+bo `qm set` bierze domyślne 8k ze storage.
+
+Powiększenie: `qm disk resize 102 scsi1 +500G` → w gościu `resize2fs /dev/sdb`
+(bez tablicy partycji, więc bez `growpart`).
+
+---
+
 ## Sprzątanie po dockerze (VM 102)
 
 Build cache rośnie z każdym deployem i **nikt go nie kasuje automatycznie**.
