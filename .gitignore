@@ -34,3 +34,6 @@ Thumbs.db
 
 __pycache__/
 *.pyc
+
+# graf wiedzy (graphify) - artefakt generowany, odtwarzalny przez /graphify
+graphify-out/
