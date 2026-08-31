@@ -54,11 +54,23 @@ scsihw: virtio-scsi-single / net0: virtio,bridge=vmbr1 / startup: order=2
 ## VM 102 — barvea-app (10.10.0.30; Caddy+Next+Redis+dwg-converter+office-converter)
 ```
 q35 / cpu: host / cores: 4 / memory: 8192 balloon=4096 / agent: 1 / onboot: 1
-scsi0: hdd-pool:vm-102-disk-0,…,size=80G
+scsi0: hdd-pool:vm-102-disk-0,…,size=80G        (system + docker)
+scsi1: hdd-pool:vm-102-disk-1,…,size=1000G      (śluza uploadu, volblocksize=64k)
 scsihw: virtio-scsi-single / net0: virtio,bridge=vmbr1 / startup: order=3
 ```
+`scsi1` → w gościu `/dev/sdb`, ext4 (`-m 0 -T largefile4`, `LABEL=upload-tmp`),
+montowany na `/srv/upload-tmp` i bind-mountowany do kontenera app jako
+`/upload-tmp`. **Właściciel `1001:1001`** — bez tego uploady padają na EACCES.
+Dodany 2026-08-31: wcześniej śluza siedziała na named volume na dysku root
+i biła się o miejsce z build cachem dockera (rośnie ~37 GB na deploy).
+Szczegóły i trasa pliku: README repo, sekcja „Śluza uploadu".
 
 ## Noty
+- **volblocksize nowych zvoli:** pula to `raidz2` na 4 dyskach. Domyślne 8k ze
+  storage daje efektywność ~33% (blok 8 KiB zajmuje 24 KiB — stąd `vm-102-disk-0`
+  o rozmiarze 80 G zajmujący w puli 331 G). Nowe dyski twórz ręcznie:
+  `zfs create -V <size> -b 64k hddpool/vm-<id>-disk-<n>` i dopiero podepnij
+  przez `qm set`, bo `qm set` z samym rozmiarem bierze 8k ze storage.
 - Wszystkie VM mają wciąż podpięte ISO `debian-13.4.0-netinst` (ide2) —
   nieszkodliwe; kandydat do `qm set <id> -ide2 none` przy porządkach.
 - IP VM-ek konfigurowane W GOŚCIU (statyczne, /etc/network/interfaces), nie

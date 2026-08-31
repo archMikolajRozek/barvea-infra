@@ -55,6 +55,7 @@ if [ "$PRESET" = compact ]; then    # 1-VM all-in-one (dedyk mały klient):
   # in-app (pubkey hardcode, nie potrzebuje Vaulta). ⚠️ NIETESTOWANE.
   GUESTS_LXC=( )
   GUESTS_VM=(  "102 barvea-app ${LAN}.30 4 8192 - 120 app 1" )
+  UPLOAD_TMP_GB=100
 elif [ "$PRESET" = staging ]; then  # małe goście — test/staging (VM-w-VM,
   # suma RAM ~10G → mieści się w 12G nested-hoście z zapasem na PVE)
   GUESTS_LXC=( "200 vault    ${LAN}.50 1 1024 - 6  vault"
@@ -62,12 +63,14 @@ elif [ "$PRESET" = staging ]; then  # małe goście — test/staging (VM-w-VM,
   GUESTS_VM=(  "100 barvea-infra ${LAN}.10 1 1024 -    20 infra 1"
                "101 barvea-data  ${LAN}.20 2 3072 -    40 data  2"
                "102 barvea-app   ${LAN}.30 2 3072 -    30 app   3" )
+  UPLOAD_TMP_GB=20
 else
   GUESTS_LXC=( "200 vault    ${LAN}.50 2 2048 - 8  vault"
                "201 storage  ${LAN}.40 4 8192 - 16 storage" )
   GUESTS_VM=(  "100 barvea-infra ${LAN}.10 2 4096  -    50  infra 1"
                "101 barvea-data  ${LAN}.20 4 24576 8192 200 data  2"
                "102 barvea-app   ${LAN}.30 4 8192  4096 80  app   3" )
+  UPLOAD_TMP_GB=1000
 fi
 
 # ── helpers ─────────────────────────────────────────────────────────
@@ -237,6 +240,19 @@ phase_guests() {
   done
   # data VM: drugi dysk 10T (jak prod) — tylko gdy jest miejsce; opcjonalne
   # qm set 101 -scsi1 "$PVE_STORAGE:vm-101-disk-1,...,size=10T"  # TODO wg potrzeb
+
+  # VM 102: OSOBNY dysk pod śluzę uploadu (/srv/upload-tmp, montowany do
+  # kontenera app jako /upload-tmp). Aplikacja skleja tam CAŁY plik zanim
+  # wyśle go do datad (POST /files nie zna offsetu ani wznowień), więc bez
+  # osobnego dysku jeden upload kilkudziesięciu GB zapełnia root i kładzie
+  # Next + Caddy — dokładnie to zdarzyło się na prodzie 2026-08-31.
+  # volblocksize=64k, NIE domyślne 8k: pula to raidz2, przy 8k blok zajmuje
+  # na dyskach 24 KiB (efektywność ~33%), przy 64k ~48%. `qm set` tworzy zvol
+  # z domyślnym 8k ze storage, więc tworzymy go ręcznie i dopiero podpinamy.
+  if qm status 102 >/dev/null 2>&1 && ! qm config 102 | grep -q '^scsi1:'; then
+      zfs list "$POOL_NAME/vm-102-disk-1" >/dev/null 2>&1 ||           zfs create -V "${UPLOAD_TMP_GB}G" -b 64k "$POOL_NAME/vm-102-disk-1"
+      qm set 102 -scsi1 "$PVE_STORAGE:vm-102-disk-1,cache=writeback,discard=on,iothread=1"
+  fi
   for def in "${GUESTS_VM[@]}"; do set -- $def; wait_ssh "$3"; done
   mark guests
 }
@@ -359,6 +375,22 @@ svc_storage() { # LXC 201 — Samba + datad + smb-provisiond + acl-sync
 svc_app() {    # VM 102 — docker + szkielet; DEPLOY APLIKACJI = bundle/deploy.sh (poza bootstrapem)
   local ip="${LAN}.30"
   vm_ssh "$ip" "command -v docker >/dev/null || { curl -fsSL https://get.docker.com | sh >/dev/null; }"  # TODO air-gap: docker .deb-y z ASSETS_DIR
+  # Śluza uploadu na dysku scsi1 (patrz phase_guests). Bez tablicy partycji —
+  # ext4 wprost na urządzeniu, więc powiększenie to `qm disk resize 102 scsi1
+  # +NG` + `resize2fs /dev/sdb`, bez growpart. `-m 0` zdejmuje 5% rezerwy
+  # roota (na 1 TB to 50 GB), `-T largefile4` = 1 i-węzeł na 4 MB (trzymamy
+  # kilkanaście wielkich .part, nie miliony małych plików).
+  vm_ssh "$ip" "if [ -b /dev/sdb ]; then
+      findmnt -rn /srv/upload-tmp >/dev/null || {
+        blkid -L upload-tmp >/dev/null 2>&1 || mkfs.ext4 -q -m 0 -L upload-tmp -T largefile4 /dev/sdb
+        mkdir -p /srv/upload-tmp
+        grep -q '^LABEL=upload-tmp ' /etc/fstab || echo 'LABEL=upload-tmp /srv/upload-tmp ext4 defaults,noatime,nofail 0 2' >> /etc/fstab
+        systemctl daemon-reload; mount -a; }
+      # uid/gid 1001 = barvea:nodejs z obrazu app. Bind-mount NIE dziedziczy
+      # właściciela z obrazu (robi to tylko pusty named volume) — bez chown
+      # każdy init uploadu pada na EACCES.
+      chown 1001:1001 /srv/upload-tmp
+    else echo '⚠️  brak /dev/sdb — śluza uploadu NIE utworzona (dysk scsi1?)'; fi"
   vm_ssh "$ip" "mkdir -p /home/$CI_USER/barvea && chown $CI_USER: /home/$CI_USER/barvea"
   vm_put "$ip" "$REPO_DIR/Caddyfile" "/home/$CI_USER/barvea/Caddyfile"
   vm_put "$ip" "$REPO_DIR/docker-compose.yml" "/home/$CI_USER/barvea/docker-compose.yml"
