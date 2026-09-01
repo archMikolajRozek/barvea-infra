@@ -38,7 +38,10 @@ CONTAINERS = ("WIP", "Shared", "Published", "Archive")
 # ograniczeniem; realnym limitem jest miejsce w puli ZFS. Podnoszac tu, podnies
 # tez DRIVE_MAX_FILE_BYTES w aplikacji, inaczej odrzuci plik wczesniej.
 MAX_UPLOAD = 2 * 1024 * 1024 * 1024  # 2 GB (domyslnie)
-CHUNK = 1024 * 1024
+# Porcja odczytu ciala. 4 MB zamiast 1 MB: przy chmurze punktow na kilka GB
+# to czterokrotnie mniej syscalli i tyle samo iteracji petli w Pythonie,
+# ktora jest tu waskim gardlem. Zgrane z buforem odczytu po stronie aplikacji.
+CHUNK = 4 * 1024 * 1024
 LOCK = threading.Lock()      # journal + mutacje
 CFG = {}
 
@@ -316,6 +319,7 @@ def op_upload(handler, org_id, rel, request_id):
     tmp = target + ".barvea-tmp"
     h = hashlib.sha256()
     got = 0
+    started = time.time()
     try:
         with open(tmp, "wb") as f:
             while got < n:
@@ -326,6 +330,12 @@ def op_upload(handler, org_id, rel, request_id):
                 h.update(chunk)
                 got += len(chunk)
             f.flush()
+            # fsync ZOSTAJE: odpowiadamy "zapisane", wiec dane musza byc na
+            # dysku, zanim aplikacja uzna transfer za domkniety. Przy kilku GB
+            # potrafi trwac dziesiatki sekund — po stronie aplikacji jest na to
+            # osobna karencja (RESPONSE_GRACE_MS), zeby wartownik nie ubil
+            # transferu tuz przed meta.
+            recv_done = time.time()
             os.fsync(f.fileno())
         # 0600: plik prywatny by-default — czytelność nadaje wyłącznie
         # per-user ACL z manifestu (files[] dla WIP)
@@ -339,6 +349,11 @@ def op_upload(handler, org_id, rel, request_id):
             pass
         raise
     st = os.stat(target)
+    elapsed = max(0.001, time.time() - started)
+    mb = got / (1024 * 1024)
+    log("upload done: %s (%.1f MB w %.1fs = %.1f MB/s; odbior %.1fs, fsync+replace %.1fs)"
+        % ("/".join(parts), mb, elapsed, mb / elapsed,
+           recv_done - started, time.time() - recv_done))
     journal_append(org_id, {
         "op": "modify" if existed else "create", "path": "/".join(parts),
         "kind": "file", "size": st.st_size, "mtime": int(st.st_mtime),
