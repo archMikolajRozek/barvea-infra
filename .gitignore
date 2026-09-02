@@ -37,3 +37,4 @@ __pycache__/
 
 # graf wiedzy (graphify) - artefakt generowany, odtwarzalny przez /graphify
 graphify-out/
+.last-deployed-sha

@@ -77,23 +77,52 @@ PREVIOUS_SHA=$(git -C "$APP_DIR" rev-parse HEAD)
 git -C "$APP_DIR" checkout "$APP_REPO_BRANCH"
 git -C "$APP_DIR" pull --ff-only origin "$APP_REPO_BRANCH"
 NEW_SHA=$(git -C "$APP_DIR" rev-parse HEAD)
-echo "Previous: $PREVIOUS_SHA"
-echo "New:      $NEW_SHA"
 
-if [[ "$PREVIOUS_SHA" == "$NEW_SHA" ]]; then
-  echo "No new commits. Skipping rebuild."
+# Skip-check przeciw PLIKOWI STANU, nie przeciw HEAD sprzed pulla.
+# Stan zapisujemy dopiero PO udanym smoke tescie, wiec przerwany deploy
+# (np. build padl na sieci do Docker Huba) NIE zostawia "No new commits" —
+# ponowne odpalenie deploy.sh po prostu dokancza robote. Wczesniejsza wersja
+# porownywala HEAD pre/post-pull: po wywalce pull byl juz zrobiony i skrypt
+# przy retry klamal, ze nie ma nic do zrobienia (2026-09-02).
+STATE_FILE="$INFRA_DIR/.last-deployed-sha"
+LAST_DEPLOYED=$(cat "$STATE_FILE" 2>/dev/null || echo "none")
+echo "Last deployed: $LAST_DEPLOYED"
+echo "New:           $NEW_SHA"
+
+if [[ "$LAST_DEPLOYED" == "$NEW_SHA" ]]; then
+  echo "No changes since last successful deploy. Nothing to do."
   exit 0
 fi
 
 # ─── 2. Build new images ───
 echo ">>> Building app image..."
 docker compose --env-file .env.production build app
-echo ">>> Building dwg-converter image..."
-docker compose --env-file .env.production build dwg-converter
-echo ">>> Building office-converter image..."
-# Pierwszy build ~1.5 GB obrazu (apt: LibreOffice) — kilka minut.
-# Kolejne deploye jada z cache warstw, o ile Dockerfile sie nie zmienil.
-docker compose --env-file .env.production build office-converter
+
+# Konwertery: build NIE-fatalny. To uslugi poboczne — chwilowo niedostepny
+# Docker Hub (TLS timeout na metadanych ubuntu:24.04, 2026-09-02) nie moze
+# blokowac deployu aplikacji. Przy faili: stare kontenery jada dalej,
+# wypisujemy ostrzezenie i pomijamy recreate tej uslugi.
+# Recreate tylko przy ZMIANIE obrazu — bez zmian nie ma po co ubijac
+# kontenera (zimny start dwg-converter generowal falszywe alerty health).
+img_id() { docker image inspect "$1" --format '{{.Id}}' 2>/dev/null || echo "none"; }
+
+CONVERTER_RECREATE=()
+CONVERTER_FAILED=()
+for svc in dwg-converter office-converter; do
+  BEFORE_ID=$(img_id "barvea-$svc:latest")
+  echo ">>> Building $svc image..."
+  if docker compose --env-file .env.production build "$svc"; then
+    AFTER_ID=$(img_id "barvea-$svc:latest")
+    if [[ "$AFTER_ID" != "$BEFORE_ID" ]]; then
+      CONVERTER_RECREATE+=("$svc")
+    else
+      echo "$svc: image unchanged — skipping recreate (no cold start)"
+    fi
+  else
+    CONVERTER_FAILED+=("$svc")
+    echo "WARN: $svc build FAILED — old container keeps running; retry deploy later"
+  fi
+done
 
 # ─── 3. Run migrations ───
 # Prisma CLI is installed at /opt/prisma-cli inside the runtime image (see
@@ -104,10 +133,10 @@ echo ">>> Running prisma migrate deploy..."
 docker compose --env-file .env.production run --rm app prisma migrate deploy
 
 # ─── 4. Recreate containers ───
-echo ">>> Recreating dwg-converter container..."
-docker compose --env-file .env.production up -d --no-deps --force-recreate dwg-converter
-echo ">>> Recreating office-converter container..."
-docker compose --env-file .env.production up -d --no-deps --force-recreate office-converter
+for svc in "${CONVERTER_RECREATE[@]}"; do
+  echo ">>> Recreating $svc container (image changed)..."
+  docker compose --env-file .env.production up -d --no-deps --force-recreate "$svc"
+done
 echo ">>> Recreating app container..."
 docker compose --env-file .env.production up -d --no-deps --force-recreate app
 
@@ -144,8 +173,21 @@ if [[ "$HTTP_CODE" != "200" ]]; then
 fi
 echo "OK: /api/health returned 200"
 
+# Stan zapisywany DOPIERO tutaj — po healthchecku i smoke tescie, i TYLKO
+# gdy komplet buildow przeszedl. Kazde wczesniejsze wyjscie oraz fail
+# konwertera zostawia stary SHA w pliku, wiec ponowny deploy.sh widzi
+# roznice i dokancza (build appki wtedy leci z cache w sekundy).
+if [[ ${#CONVERTER_FAILED[@]} -eq 0 ]]; then
+  echo "$NEW_SHA" > "$STATE_FILE"
+fi
+
 echo ""
 echo "═══════════════════════════════════════════════════════════════"
 echo "Deploy complete: $PREVIOUS_SHA → $NEW_SHA"
 echo "Backup retained: $BACKUP_DIR"
+if [[ ${#CONVERTER_FAILED[@]} -gt 0 ]]; then
+  echo "⚠️  UWAGA: build padl dla: ${CONVERTER_FAILED[*]} — stare kontenery"
+  echo "   dzialaja dalej. Odpal deploy.sh ponownie, gdy Docker Hub wroci"
+  echo "   (stan NIE zostal oznaczony jako pelny — retry przebuduje)."
+fi
 echo "═══════════════════════════════════════════════════════════════"
