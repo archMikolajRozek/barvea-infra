@@ -151,7 +151,16 @@ def sha256_file(path):
 # HTML/SVG nie może się wyrenderować na naszej domenie (XSS).
 INLINE_MIME = {".pdf": "application/pdf", ".png": "image/png",
                ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
-               ".webp": "image/webp", ".gif": "image/gif"}
+               ".webp": "image/webp", ".gif": "image/gif",
+               # Media: nie wykonuje skryptow w kontekscie originu, wiec
+               # inline bezpieczne. Tylko formaty grywalne natywnie w
+               # przegladarce - reszta (avi/mkv/wmv) celowo poza lista,
+               # web pokazuje dla nich "pobierz plik" (02.09).
+               ".mp4": "video/mp4", ".m4v": "video/x-m4v",
+               ".webm": "video/webm", ".ogv": "video/ogg",
+               ".mov": "video/quicktime",
+               ".mp3": "audio/mpeg", ".m4a": "audio/mp4",
+               ".ogg": "audio/ogg", ".wav": "audio/wav"}
 
 
 def dl_sign(org_id, rel_path, ttl, inline=False):
