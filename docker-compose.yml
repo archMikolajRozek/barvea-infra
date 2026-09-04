@@ -174,7 +174,11 @@ services:
     networks:
       - barvea_web
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      # PELNA SCIEZKA, nie gole "curl": w obrazie micromamba curl z
+      # conda-forge siedzi w /opt/conda/bin, ktorego NIE MA w PATH dla
+      # HEALTHCHECK/exec (entrypoint aktywuje env conda tylko dla CMD).
+      # Gole "curl" = trwale unhealthy (zweryfikowane 2026-09-04).
+      test: ["CMD", "/opt/conda/bin/curl", "-fsS", "http://127.0.0.1:8080/health"]
       interval: 30s
       timeout: 5s
       retries: 3

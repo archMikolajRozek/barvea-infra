@@ -109,6 +109,21 @@ img_id() { docker image inspect "$1" --format '{{.Id}}' 2>/dev/null || echo "non
 CONVERTER_RECREATE=()
 CONVERTER_FAILED=()
 for svc in dwg-converter office-converter point-cloud-preview; do
+  # point-cloud-preview: scratch NA DUZYM DYSKU musi istniec i nie moze byc
+  # root-owned ZANIM kontener wstanie. Docker sam tworzy brakujacy katalog
+  # bind-mountu jako root:755, a wtedy CPython PO CICHU pomija niezapisywalny
+  # TMPDIR i wraca do /tmp w overlayu na dysku root — czyli dokladnie awaria,
+  # przed ktora TMPDIR mial chronic, tylko bezobjawowo. Lepiej glosno pominac.
+  if [[ "$svc" == "point-cloud-preview" ]]; then
+    SCRATCH=/srv/upload-tmp/pcp-scratch
+    if [[ ! -d "$SCRATCH" || "$(stat -c %u "$SCRATCH")" == "0" ]]; then
+      echo "WARN: $SCRATCH brak lub root-owned — pomijam $svc."
+      echo "      Napraw (uid sprawdz: docker compose run --rm --no-deps $svc id -u):"
+      echo "        sudo mkdir -p $SCRATCH && sudo chown <uid> $SCRATCH"
+      CONVERTER_FAILED+=("$svc")
+      continue
+    fi
+  fi
   BEFORE_ID=$(img_id "barvea-$svc:latest")
   echo ">>> Building $svc image..."
   if docker compose --env-file .env.production build "$svc"; then
@@ -130,7 +145,11 @@ done
 # binary directly avoids npx's "fall through to npm registry" path that
 # could otherwise pull Prisma 7 and crash on the v6 schema.
 echo ">>> Running prisma migrate deploy..."
-docker compose --env-file .env.production run --rm app prisma migrate deploy
+# --no-deps OBOWIAZKOWE: bez niego compose run startuje depends_on appki,
+# a gdy obraz ktoregos sidecara nie istnieje (np. build padl wyzej,
+# nie-fatalnie), compose probuje go zbudowac i set -e ubija caly deploy
+# na kroku migracji. Migracja potrzebuje tylko DATABASE_URL.
+docker compose --env-file .env.production run --rm --no-deps app prisma migrate deploy
 
 # ─── 4. Recreate containers ───
 for svc in "${CONVERTER_RECREATE[@]}"; do
