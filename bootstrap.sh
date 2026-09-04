@@ -69,7 +69,7 @@ else
                "201 storage  ${LAN}.40 4 8192 - 16 storage" )
   GUESTS_VM=(  "100 barvea-infra ${LAN}.10 2 4096  -    50  infra 1"
                "101 barvea-data  ${LAN}.20 4 24576 8192 200 data  2"
-               "102 barvea-app   ${LAN}.30 4 8192  4096 80  app   3" )
+               "102 barvea-app   ${LAN}.30 4 8192  -    80  app   3" )   # bez balloona: build Nexta potrzebuje pelnych 8G (OOM 2026-09-05)
   UPLOAD_TMP_GB=1000
 fi
 
