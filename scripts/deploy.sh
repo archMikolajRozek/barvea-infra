@@ -108,7 +108,7 @@ img_id() { docker image inspect "$1" --format '{{.Id}}' 2>/dev/null || echo "non
 
 CONVERTER_RECREATE=()
 CONVERTER_FAILED=()
-for svc in dwg-converter office-converter; do
+for svc in dwg-converter office-converter point-cloud-preview; do
   BEFORE_ID=$(img_id "barvea-$svc:latest")
   echo ">>> Building $svc image..."
   if docker compose --env-file .env.production build "$svc"; then

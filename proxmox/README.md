@@ -51,7 +51,7 @@ scsi0: …,size=200G   scsi1: …,size=10T   (oba writeback+discard+iothread)
 scsihw: virtio-scsi-single / net0: virtio,bridge=vmbr1 / startup: order=2
 ```
 
-## VM 102 — barvea-app (10.10.0.30; Caddy+Next+Redis+dwg-converter+office-converter)
+## VM 102 — barvea-app (10.10.0.30; Caddy+Next+konwertery dwg/office/point-cloud)
 ```
 q35 / cpu: host / cores: 4 / memory: 8192 balloon=4096 / agent: 1 / onboot: 1
 scsi0: hdd-pool:vm-102-disk-0,…,size=80G        (system + docker)
@@ -61,6 +61,8 @@ scsihw: virtio-scsi-single / net0: virtio,bridge=vmbr1 / startup: order=3
 `scsi1` → w gościu `/dev/sdb`, ext4 (`-m 0 -T largefile4`, `LABEL=upload-tmp`),
 montowany na `/srv/upload-tmp` i bind-mountowany do kontenera app jako
 `/upload-tmp`. **Właściciel `1001:1001`** — bez tego uploady padają na EACCES.
+Podkatalog `pcp-scratch/` = TMPDIR sidecara point-cloud-preview (streamuje
+źródło do 20 GB przed decymacją PDAL) — właściciel wg uid MAMBA_USER obrazu.
 Dodany 2026-08-31: wcześniej śluza siedziała na named volume na dysku root
 i biła się o miejsce z build cachem dockera (rośnie ~37 GB na deploy).
 Szczegóły i trasa pliku: README repo, sekcja „Śluza uploadu".

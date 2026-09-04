@@ -32,6 +32,7 @@ services:
       NEXT_TELEMETRY_DISABLED: "1"
       DWG_CONVERTER_URL: "http://dwg-converter:8080"
       OFFICE_CONVERTER_URL: "http://office-converter:8080"
+      POINT_CLOUD_PREVIEW_URL: "http://point-cloud-preview:8080"
       # Upload kawałkowy: kawałki lądują tu do czasu finalizacji (aplikacja
       # skleja CAŁY plik lokalnie, bo datad ma tylko POST /files — bez offsetu
       # i wznowień). Katalog MUSI pomieścić największe pliki (chmury punktów).
@@ -55,6 +56,8 @@ services:
       # twardy warunek zablokowalby start CALEJ aplikacji. Aplikacja sama
       # zwraca czytelny komunikat, gdy converter nie odpowiada.
       office-converter:
+        condition: service_started
+      point-cloud-preview:
         condition: service_started
     healthcheck:
       # Force IPv4 — `localhost` resolves to ::1 (IPv6) in some Docker netconfigs,
@@ -130,6 +133,52 @@ services:
       retries: 3
       # LibreOffice startuje wolniej niz dwg-converter (wiekszy obraz,
       # zimny cache stron) — 60 s zanim healthcheck zacznie liczyc bledy.
+      start_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+  # ───────────────────────────────────────────────────────────
+  # Point-cloud preview sidecar (PDAL)
+  # Decymuje LAS/LAZ/PLY/PCD/XYZ/PTS/E57 do małego binarnego PLY dla
+  # viewera w przeglądarce (surowa chmura = multi-GB; browser ma twardy
+  # limit ~2 GB na ArrayBuffer). Wewnętrzny — bez portu na hoście.
+  # Obraz: micromamba + PDAL z conda-forge (apt NIE ma pakietu pdal) —
+  # pierwszy build ciągnie setki MB z conda-forge, kolejne z cache.
+  # ───────────────────────────────────────────────────────────
+  point-cloud-preview:
+    build:
+      context: ./app/docker/point-cloud-preview
+      dockerfile: Dockerfile
+    image: barvea-point-cloud-preview:latest
+    container_name: barvea-point-cloud-preview
+    restart: unless-stopped
+    environment:
+      # Scratch NA DUŻYM DYSKU: serwis streamuje źródło (default do 20 GB,
+      # POINTCLOUD_MAX_BYTES) do pliku tymczasowego przed decymacją. Bez
+      # TMPDIR lądowałoby to w overlayu na dysku root 75 G — jeden podgląd
+      # dużej chmury zapełnia root (ta sama lekcja co śluza, 2026-08-31).
+      TMPDIR: "/scratch"
+      # Opcjonalny shared-secret (pusty = otwarte na wewnętrznym bridge'u,
+      # jak dwg/office). Ustaw w .env.production po OBU stronach — appka
+      # dostaje przez env_file, sidecar przez interpolację poniżej.
+      POINTCLOUD_PREVIEW_TOKEN: "${POINTCLOUD_PREVIEW_TOKEN:-}"
+    volumes:
+      # Podkatalog na dysku śluzy (1 TB). Utwórz PRZED startem:
+      #   sudo mkdir -p /srv/upload-tmp/pcp-scratch
+      #   sudo chown <uid-MAMBA_USER> /srv/upload-tmp/pcp-scratch
+      # uid sprawdź po buildzie: docker compose run --rm point-cloud-preview id
+      - /srv/upload-tmp/pcp-scratch:/scratch
+    networks:
+      - barvea_web
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      # Stack conda/PDAL startuje wolno — jak office-converter.
       start_period: 60s
     logging:
       driver: json-file
