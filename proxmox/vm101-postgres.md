@@ -44,3 +44,29 @@ systemctl restart postgresql@18-main
 # migracje: prisma migrate deploy (z app, przez deploy.sh)
 ```
 Backup: restic barvea-data 03:09 (pg_dump) + pre-deploy pgcustom (deploy.sh).
+
+
+---
+
+# MinIO na VM 101 (legacy/fallback store — appka: podglądy .previews/)
+
+Usługa natywna (`systemctl status minio`), env: `/etc/minio/minio.conf`,
+konsola tylko przez WG. `mc` w `/usr/local/bin/mc`; alias **`local`** = root
+(działa), alias `barvea-app` ma NIEAKTUALNY sekret (SignatureDoesNotMatch,
+stan 2026-09-05) — nie używać do testów.
+
+User appki: `barvea_app_minio`, polityka `barvea-app-policy` — źródło prawdy
+w repo: [minio-policy-barvea-app.json](minio-policy-barvea-app.json). Update:
+
+```bash
+mc admin policy create local barvea-app-policy <plik.json>   # nadpisuje in-place
+```
+
+**Lekcja 2026-09-05:** polityka miała Put/Get/Delete/List, ale NIE miała akcji
+multipart (`ListBucketMultipartUploads`, `ListMultipartUploadParts`,
+`AbortMultipartUpload`). SDK MinIO przełącza się na upload wieloczęściowy przy
+większych plikach — małe zapisy działały, a podglądy chmur punktów (.ply po
+decymacji PDAL) i DWG padały na 403. Objaw u appki: "Access Denied" na
+putObject. Diagnoza: `mc admin trace --errors local` + klik w UI → pokazał
+`403 s3.ListMultipartUploads`. Dopisując bucket do systemu, dodaj KOMPLET
+akcji z pliku wyżej, nie sam PutObject.
