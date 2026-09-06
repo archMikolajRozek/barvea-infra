@@ -53,9 +53,11 @@ scsihw: virtio-scsi-single / net0: virtio,bridge=vmbr1 / startup: order=2
 
 ## VM 102 — barvea-app (10.10.0.30; Caddy+Next+konwertery dwg/office/point-cloud)
 ```
-q35 / cpu: host / cores: 4 / memory: 8192 balloon=8192 / agent: 1 / onboot: 1
-   (balloon podniesiony z 4096 → 8192 2026-09-05: host zabral polowe RAM,
-    VM zostala z 3.8G i build Nexta padal na OOM/heap limit)
+q35 / cpu: host / cores: 8 / memory: 16384 balloon=16384 / agent: 1 / onboot: 1
+   (2026-09-07: 4c/8G → 8c/16G — VM liczy PDAL-em chmury, konwertuje
+    LibreOffice/DWG i buduje Nexta, czasem naraz; host 12C/24T+128G ma zapas.
+    Wcześniej 2026-09-05 balloon 4096→8192: host zabierał połowę RAM,
+    build Nexta padał na OOM/heap limit. Balloon trzymać = memory.)
 scsi0: hdd-pool:vm-102-disk-0,…,size=80G        (system + docker)
 scsi1: hdd-pool:vm-102-disk-1,…,size=1000G      (śluza uploadu, volblocksize=64k)
 scsihw: virtio-scsi-single / net0: virtio,bridge=vmbr1 / startup: order=3
