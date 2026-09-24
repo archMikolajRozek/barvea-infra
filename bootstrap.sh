@@ -66,7 +66,7 @@ elif [ "$PRESET" = staging ]; then  # małe goście — test/staging (VM-w-VM,
   UPLOAD_TMP_GB=20
 else
   GUESTS_LXC=( "200 vault    ${LAN}.50 2 2048 - 8  vault"
-               "201 storage  ${LAN}.40 4 12288 - 16 storage" )   # 12G: Samba+datad+clamd (sygnatury ~1.5G)
+               "201 storage  ${LAN}.40 4 16384 - 16 storage" )   # 16G: Samba+datad+clamd (sygnatury ~1.5G), host ma zapas
   GUESTS_VM=(  "100 barvea-infra ${LAN}.10 2 4096  -    50  infra 1"
                "101 barvea-data  ${LAN}.20 4 24576 8192 200 data  2"
                "102 barvea-app   ${LAN}.30 8 16384 -    80  app   3" )   # 8c/16G od 2026-09-07: PDAL+LibreOffice+build Nexta naraz; bez balloona (OOM 2026-09-05)

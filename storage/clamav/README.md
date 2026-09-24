@@ -10,7 +10,7 @@ widoczny tylko tu; pliki 0600 → clamd jako root w nieuprzywilejowanym LXC).
 ## Instalacja / update (host Proxmox)
 
 ```bash
-pct set 201 -memory 12288                                  # +4 G na sygnatury (live, bez restartu)
+pct set 201 -memory 16384                                  # 8→16 G (live, bez restartu): sygnatury ~1.5 G + zapas, host ma 128 G
 pct exec 201 -- bash -c "DEBIAN_FRONTEND=noninteractive apt-get install -y clamav-daemon clamav-freshclam >/dev/null"
 pct exec 201 -- systemctl stop clamav-daemon
 pct push 201 storage/clamav/clamd.conf /etc/clamav/clamd.conf      # (plik ze scp-owanego repo: app→/tmp na hoście)
@@ -50,5 +50,5 @@ Eicar-Test-Signature…" w Błędach systemu; w `block` → 422 MALWARE. To samo
 
 ## Pamięć
 clamd ~1.5 GB RSS (sygnatury) + skoki przy skanie dużych archiwów. LXC 201 po
-zmianie: 12 G (Samba + datad + acl-sync + clamd). `ConcurrentDatabaseReload no`
+zmianie: 16 G (Samba + datad + acl-sync + clamd). `ConcurrentDatabaseReload no`
 = reload nie dubluje pamięci.

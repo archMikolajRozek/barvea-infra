@@ -61,7 +61,7 @@ compose sam wykrywa zmianę obrazu LUB konfiguracji.
 
 Pełny przepis: `storage/clamav/README.md`. Skrót:
 ```bash
-pct set 201 -memory 12288
+pct set 201 -memory 16384
 pct exec 201 -- bash -c "DEBIAN_FRONTEND=noninteractive apt-get install -y clamav-daemon clamav-freshclam >/dev/null; systemctl stop clamav-daemon"
 pct push 201 /tmp/clamd.conf /etc/clamav/clamd.conf
 pct exec 201 -- bash -c "systemctl enable --now clamav-freshclam; freshclam --quiet || true; systemctl restart clamav-daemon; sleep 20; ps -o user= -C clamd; ss -ltnp | grep 3310"
