@@ -130,8 +130,9 @@ for svc in dwg-converter office-converter point-cloud-preview; do
     AFTER_ID=$(img_id "barvea-$svc:latest")
     if [[ "$AFTER_ID" != "$BEFORE_ID" ]]; then
       CONVERTER_RECREATE+=("$svc")
+      echo "$svc: image changed"
     else
-      echo "$svc: image unchanged — skipping recreate (no cold start)"
+      echo "$svc: image unchanged (recreate only if compose config changed)"
     fi
   else
     CONVERTER_FAILED+=("$svc")
@@ -152,9 +153,20 @@ echo ">>> Running prisma migrate deploy..."
 docker compose --env-file .env.production run --rm --no-deps app prisma migrate deploy
 
 # ─── 4. Recreate containers ───
-for svc in "${CONVERTER_RECREATE[@]}"; do
-  echo ">>> Recreating $svc container (image changed)..."
-  docker compose --env-file .env.production up -d --no-deps --force-recreate "$svc"
+# Konwertery: zwykle `up -d` (BEZ --force-recreate). Compose sam porównuje
+# obraz I konfigurację z działającym kontenerem: zmiana obrazu albo sekcji
+# w docker-compose.yml (user/read_only/mem_limit/sieci...) = recreate,
+# brak zmian = kontener nietknięty (bez zimnego startu). Wcześniejsze
+# porównanie ID obrazu gubiło zmiany samej konfiguracji (hardening 09.2026).
+# Pomijamy tylko te, których build padł (stary kontener jedzie dalej).
+for svc in dwg-converter office-converter point-cloud-preview; do
+  if printf '%s
+' "${CONVERTER_FAILED[@]}" | grep -qx "$svc"; then
+    echo ">>> $svc: build failed earlier — leaving running container as is"
+    continue
+  fi
+  echo ">>> up $svc (compose recreates only if image/config changed)..."
+  docker compose --env-file .env.production up -d --no-deps "$svc"
 done
 echo ">>> Recreating app container..."
 docker compose --env-file .env.production up -d --no-deps --force-recreate app

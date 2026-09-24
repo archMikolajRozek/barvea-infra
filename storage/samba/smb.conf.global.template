@@ -11,6 +11,11 @@
    security = USER
    server min protocol = SMB3
 
+   # Globalna lista veto (bezpieczeństwo: exe/skrypty/CAD-autoload/html/svg)
+   # — plik w repo storage/samba/barvea-veto.conf, pushowany przez bootstrap.
+   # Per-org veto z acl-sync dokleja tę listę (share-level nadpisuje global).
+   include = /etc/samba/barvea-veto.conf
+
    # drukarki off
    disable spoolss = Yes
    load printers = No

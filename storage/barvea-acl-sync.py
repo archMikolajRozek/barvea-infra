@@ -130,6 +130,18 @@ VETO_CATEGORY = {
                     "*.ps1", "*.lnk"],
 }
 VETO_ORDER = ["windows", "macos", "office", "executables"]
+# Globalna lista bezpieczeństwa (= /etc/samba/barvea-veto.conf, włączana z
+# [global]). Share-level `veto files` NADPISUJE global (Samba nie scala), więc
+# per-org veto MUSI ją zawierać, inaczej włączenie kategorii przez APP
+# wyłączyłoby blokadę exe/lsp na tym udziale. Źródło prawdy: app
+# lib/upload-security.ts BLOCKED_EXTENSIONS (audyt 2026-09-24).
+SECURITY_VETO = [
+    "*.exe", "*.dll", "*.bat", "*.cmd", "*.com", "*.msi", "*.scr", "*.pif",
+    "*.cpl", "*.vbs", "*.vbe", "*.js", "*.jse", "*.wsf", "*.wsh", "*.ps1",
+    "*.psm1", "*.hta", "*.lnk", "*.reg", "*.inf", "*.jar", "*.sh", "*.lsp",
+    "*.fas", "*.vlx", "*.mnl", "*.dvb", "*.arx", "*.dbx", "*.crx", "*.html",
+    "*.htm", "*.svg", "*.php",
+]
 
 
 def ensure_veto_include(share_conf, veto_file):
@@ -164,7 +176,12 @@ def apply_veto(slug, manifest):
     enabled = bool(sc.get("enabled"))
     cats = [c for c in VETO_ORDER if c in (sc.get("categories") or [])]
     if enabled and cats:
-        pats = [p for c in cats for p in VETO_CATEGORY[c]]
+        # SECURITY zawsze pierwsze; kategorie doklejane bez duplikatów
+        pats = list(SECURITY_VETO)
+        for c in cats:
+            for p in VETO_CATEGORY[c]:
+                if p not in pats:
+                    pats.append(p)
         veto = "/" + "/".join(pats) + "/"
         desired = ("# BARVEA veto — zarządzane przez acl-sync, NIE edytuj\n"
                    f"   veto files = {veto}\n"

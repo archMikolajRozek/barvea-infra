@@ -66,7 +66,7 @@ elif [ "$PRESET" = staging ]; then  # małe goście — test/staging (VM-w-VM,
   UPLOAD_TMP_GB=20
 else
   GUESTS_LXC=( "200 vault    ${LAN}.50 2 2048 - 8  vault"
-               "201 storage  ${LAN}.40 4 8192 - 16 storage" )
+               "201 storage  ${LAN}.40 4 12288 - 16 storage" )   # 12G: Samba+datad+clamd (sygnatury ~1.5G)
   GUESTS_VM=(  "100 barvea-infra ${LAN}.10 2 4096  -    50  infra 1"
                "101 barvea-data  ${LAN}.20 4 24576 8192 200 data  2"
                "102 barvea-app   ${LAN}.30 8 16384 -    80  app   3" )   # 8c/16G od 2026-09-07: PDAL+LibreOffice+build Nexta naraz; bez balloona (OOM 2026-09-05)
@@ -351,6 +351,12 @@ svc_storage() { # LXC 201 — Samba + datad + smb-provisiond + acl-sync
     echo '${LAN}.30 app.barvea.internal' >> /etc/hosts
     echo '${LAN}.40 barvea-storage'      >> /etc/hosts"
   pct push 201 "$REPO_DIR/storage/samba/smb.conf.global.template" /etc/samba/smb.conf
+  pct push 201 "$REPO_DIR/storage/samba/barvea-veto.conf" /etc/samba/barvea-veto.conf   # include z [global]
+  # ClamAV: jeden clamd dla INSTREAM (uploady web) i SCAN (pliki z udziału) —
+  # musi widzieć /srv/orgs, dlatego tu, nie na VM 102. Root (pliki 0600).
+  pct exec 201 -- bash -c "DEBIAN_FRONTEND=noninteractive apt-get install -y clamav-daemon clamav-freshclam >/dev/null; systemctl stop clamav-daemon"
+  pct push 201 "$REPO_DIR/storage/clamav/clamd.conf" /etc/clamav/clamd.conf
+  pct exec 201 -- bash -c "systemctl enable --now clamav-freshclam; freshclam --quiet || true; systemctl enable --now clamav-daemon"
   for f in barvea-datad.py smb-provisiond.py barvea-acl-sync.py; do
       pct push 201 "$REPO_DIR/storage/$f" "/usr/local/sbin/$f"
       pct exec 201 -- chmod 755 "/usr/local/sbin/$f"

@@ -47,7 +47,8 @@ services:
       # od pustego named volume, NIE dziedziczy właściciela z obrazu (EACCES).
       - /srv/upload-tmp:/upload-tmp
     networks:
-      - barvea_web
+      - barvea_web        # Caddy + egress (Postgres/Redis/MinIO/datad po SNAT)
+      - barvea_internal   # sidecary (bez egressu)
     depends_on:
       dwg-converter:
         condition: service_healthy
@@ -94,8 +95,27 @@ services:
     image: barvea-dwg-converter:latest
     container_name: barvea-dwg-converter
     restart: unless-stopped
+    # ── Hardening (audyt 2026-09-24): sidecar parsuje wrogie binaria
+    # bibliotekami C/C++ — najbardziej prawdopodobna powierzchnia RCE.
+    # Non-root (57439 = ten sam uid co pcp/MAMBA_USER, jeden uid dla wszystkich
+    # sidecarów), root-fs read-only, /tmp jako tmpfs, zero capabilities,
+    # brak eskalacji, limit PID-ów i pamięci. UWAGA: tmpfs liczy się do
+    # mem_limit (strony tmpfs są księgowane na cgroup piszącego).
+    user: "57439:57439"
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 512
+    # server.py: WORK_DIR=/tmp/dwg tworzony przy imporcie (mkdir parents) —
+    # tmpfs nad /tmp jest OK. HOME=/tmp: gunicorn/biblioteki nie próbują
+    # pisać do nieistniejącego $HOME uid-a 57439 na read-only fs.
+    environment:
+      HOME: "/tmp"
+    tmpfs:
+      - /tmp:size=2g,mode=1777
+    mem_limit: 3g          # zmierzone ~1 GB szczyt (APP) + tmpfs
     networks:
-      - barvea_web
+      - barvea_internal    # tylko app → sidecar; zero egressu
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
       interval: 30s
@@ -124,8 +144,27 @@ services:
     image: barvea-office-converter:latest
     container_name: barvea-office-converter
     restart: unless-stopped
+    # ── Hardening (audyt 2026-09-24): sidecar parsuje wrogie binaria
+    # bibliotekami C/C++ — najbardziej prawdopodobna powierzchnia RCE.
+    # Non-root (57439 = ten sam uid co pcp/MAMBA_USER, jeden uid dla wszystkich
+    # sidecarów), root-fs read-only, /tmp jako tmpfs, zero capabilities,
+    # brak eskalacji, limit PID-ów i pamięci. UWAGA: tmpfs liczy się do
+    # mem_limit (strony tmpfs są księgowane na cgroup piszącego).
+    user: "57439:57439"
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 512
+    # LibreOffice potrzebuje zapisywalnego HOME/profilu — server.py ustawia
+    # HOME per żądanie pod /tmp/office/<uuid> (tmpfs). Cache fontconfig
+    # z obrazu (/var/cache/fontconfig) jest tylko czytany.
+    environment:
+      HOME: "/tmp"
+    tmpfs:
+      - /tmp:size=2g,mode=1777
+    mem_limit: 3g          # zmierzone ~2 GB szczyt (APP) + tmpfs
     networks:
-      - barvea_web
+      - barvea_internal
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
       interval: 30s
@@ -155,7 +194,25 @@ services:
     image: barvea-point-cloud-preview:latest
     container_name: barvea-point-cloud-preview
     restart: unless-stopped
+    # ── Hardening (audyt 2026-09-24): sidecar parsuje wrogie binaria
+    # bibliotekami C/C++ — najbardziej prawdopodobna powierzchnia RCE.
+    # Non-root (57439 = ten sam uid co pcp/MAMBA_USER, jeden uid dla wszystkich
+    # sidecarów), root-fs read-only, /tmp jako tmpfs, zero capabilities,
+    # brak eskalacji, limit PID-ów i pamięci. UWAGA: tmpfs liczy się do
+    # mem_limit (strony tmpfs są księgowane na cgroup piszącego).
+    user: "57439:57439"
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 512
+    # Scratch źródeł = dysk (bind niżej), więc tmpfs /tmp może być mały.
+    # HOME=/tmp: gunicorn 26 (conda) zakłada control socket w $HOME/.gunicorn
+    # — na read-only /home/mambauser by padł.
+    tmpfs:
+      - /tmp:size=512m,mode=1777
+    mem_limit: 4g          # zmierzone ~2.5 GB szczyt na 320M pkt (APP)
     environment:
+      HOME: "/tmp"
       # Scratch NA DUŻYM DYSKU: serwis streamuje źródło (default do 20 GB,
       # POINTCLOUD_MAX_BYTES) do pliku tymczasowego przed decymacją. Bez
       # TMPDIR lądowałoby to w overlayu na dysku root 75 G — jeden podgląd
@@ -172,6 +229,10 @@ services:
       # uid sprawdź po buildzie: docker compose run --rm point-cloud-preview id
       - /srv/upload-tmp/pcp-scratch:/scratch
     networks:
+      - barvea_internal
+      # WYJĄTEK od "sidecary bez egressu": pcp sam pobiera źródło z podpisanego
+      # URL-a (/dl/ przez app.barvea.com), więc potrzebuje wyjścia. Gdy APP
+      # przejdzie na URL wewnętrzny (datad/app po sieci docker), zdjąć.
       - barvea_web
     healthcheck:
       # PELNA SCIEZKA, nie gole "curl": w obrazie micromamba curl z
@@ -223,6 +284,13 @@ networks:
   barvea_web:
     driver: bridge
     name: barvea_web
+  # Sieć bez egressu (internal: true = brak routingu na zewnątrz, także do
+  # LAN 10.10.0.0/24). app ↔ sidecary rozmawiają tylko tutaj; skompromitowany
+  # konwerter nie ma dokąd zadzwonić.
+  barvea_internal:
+    driver: bridge
+    internal: true
+    name: barvea_internal
 
 volumes:
   caddy_data:
