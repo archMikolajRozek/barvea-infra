@@ -35,8 +35,9 @@ pct push 201 /tmp/barvea-acl-sync.py /usr/local/sbin/barvea-acl-sync.py
 pct exec 201 -- chmod 755 /usr/local/sbin/barvea-acl-sync.py
 ```
 Test: z Windowsa przez udział skopiuj `test.exe`/`acad.lsp` → „odmowa dostępu"
-albo plik znika z listingu. Efekt uboczny: istniejące pliki z listy znikają
-z widoku SMB (nie są kasowane, web je widzi).
+albo plik znika z listingu. Lista = tylko wykonywalne/CAD-autoload; grupa
+web-content (.html/.svg/.php) celowo poza veto (korekta APP 24.09 — SVG to
+rysunki użytkowników, pilnuje ich appka na ingest, nie Samba).
 
 ## Krok 2 — sidecary (VM 102, ~15 min + testy)
 

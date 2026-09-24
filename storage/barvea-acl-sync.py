@@ -139,9 +139,8 @@ SECURITY_VETO = [
     "*.exe", "*.dll", "*.bat", "*.cmd", "*.com", "*.msi", "*.scr", "*.pif",
     "*.cpl", "*.vbs", "*.vbe", "*.js", "*.jse", "*.wsf", "*.wsh", "*.ps1",
     "*.psm1", "*.hta", "*.lnk", "*.reg", "*.inf", "*.jar", "*.sh", "*.lsp",
-    "*.fas", "*.vlx", "*.mnl", "*.dvb", "*.arx", "*.dbx", "*.crx", "*.html",
-    "*.htm", "*.svg", "*.php",
-]
+    "*.fas", "*.vlx", "*.mnl", "*.dvb", "*.arx", "*.dbx", "*.crx",
+]   # bez web-content (.html/.svg/.php) — decyzja APP 24.09: veto = wykonywalne
 
 
 def ensure_veto_include(share_conf, veto_file):
