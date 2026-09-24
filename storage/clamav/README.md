@@ -15,9 +15,16 @@ pct exec 201 -- bash -c "DEBIAN_FRONTEND=noninteractive apt-get install -y clama
 pct exec 201 -- systemctl stop clamav-daemon
 pct push 201 storage/clamav/clamd.conf /etc/clamav/clamd.conf      # (plik ze scp-owanego repo: app→/tmp na hoście)
 pct exec 201 -- bash -c "systemctl enable --now clamav-freshclam; freshclam --quiet || true"   # 1. pobranie baz ~300 MB
-pct exec 201 -- systemctl restart clamav-daemon
+# TCP 3310: Debian aktywuje clamd przez systemd socket, wtedy TCPSocket z
+# clamd.conf jest IGNOROWANY — port dodajemy override'em socketu:
+pct exec 201 -- mkdir -p /etc/systemd/system/clamav-daemon.socket.d
+pct push 201 storage/clamav/clamav-daemon.socket-tcp.conf /etc/systemd/system/clamav-daemon.socket.d/tcp.conf
+pct exec 201 -- bash -c "systemctl daemon-reload; systemctl restart clamav-daemon.socket clamav-daemon"
 pct exec 201 -- bash -c "sleep 20; ps -o user= -C clamd; ss -ltnp | grep 3310"   # root + 10.10.0.40:3310
 ```
+Gotcha z wdrożenia 2026-09-24: `apt-get install` padł na 404 (stary indeks) —
+`apt-get update` najpierw. Bez override'u socketu port 3310 nie wstaje mimo
+poprawnego clamd.conf.
 
 Test lokalny (EICAR):
 ```bash

@@ -354,9 +354,12 @@ svc_storage() { # LXC 201 — Samba + datad + smb-provisiond + acl-sync
   pct push 201 "$REPO_DIR/storage/samba/barvea-veto.conf" /etc/samba/barvea-veto.conf   # include z [global]
   # ClamAV: jeden clamd dla INSTREAM (uploady web) i SCAN (pliki z udziału) —
   # musi widzieć /srv/orgs, dlatego tu, nie na VM 102. Root (pliki 0600).
-  pct exec 201 -- bash -c "DEBIAN_FRONTEND=noninteractive apt-get install -y clamav-daemon clamav-freshclam >/dev/null; systemctl stop clamav-daemon"
+  pct exec 201 -- bash -c "apt-get update -qq; DEBIAN_FRONTEND=noninteractive apt-get install -y clamav-daemon clamav-freshclam >/dev/null; systemctl stop clamav-daemon"
   pct push 201 "$REPO_DIR/storage/clamav/clamd.conf" /etc/clamav/clamd.conf
-  pct exec 201 -- bash -c "systemctl enable --now clamav-freshclam; freshclam --quiet || true; systemctl enable --now clamav-daemon"
+  # TCP 3310 przez override socketu — przy aktywacji socketu clamd ignoruje TCPSocket z conf
+  pct exec 201 -- mkdir -p /etc/systemd/system/clamav-daemon.socket.d
+  pct push 201 "$REPO_DIR/storage/clamav/clamav-daemon.socket-tcp.conf" /etc/systemd/system/clamav-daemon.socket.d/tcp.conf
+  pct exec 201 -- bash -c "systemctl daemon-reload; systemctl enable --now clamav-freshclam; freshclam --quiet || true; systemctl enable --now clamav-daemon.socket clamav-daemon"
   for f in barvea-datad.py smb-provisiond.py barvea-acl-sync.py; do
       pct push 201 "$REPO_DIR/storage/$f" "/usr/local/sbin/$f"
       pct exec 201 -- chmod 755 "/usr/local/sbin/$f"
