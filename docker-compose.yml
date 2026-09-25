@@ -210,7 +210,14 @@ services:
     # — na read-only /home/mambauser by padł.
     tmpfs:
       - /tmp:size=512m,mode=1777
-    mem_limit: 4g          # zmierzone ~2.5 GB szczyt na 320M pkt (APP)
+    # 2026-09-25: 4g → 12g. Pomiar APP (2.5 GB) był dla 320 mln pkt; E57 na
+    # 21.7 GB = ~1 mld pkt → worker gunicorn ginął z OOM w środku joba, appka
+    # widziała tylko ECONNRESET (7× w CSV bez deployu). Pamięć PDAL skaluje
+    # się ze źródłem, dopóki pipeline nie jest strumieniowy (writers.ply nie
+    # streamuje). UWAGA: VM 102 ma 16 G — przy 12g tu + 3g office + 3g dwg
+    # + appka szczyty równoległe mogą się nie zmieścić; docelowo VM 102 → 24 G
+    # w oknie z restartem. mem_limit to sufit, nie rezerwacja.
+    mem_limit: 12g
     environment:
       HOME: "/tmp"
       # Scratch NA DUŻYM DYSKU: serwis streamuje źródło (default do 20 GB,
@@ -241,8 +248,10 @@ services:
       # Gole "curl" = trwale unhealthy (zweryfikowane 2026-09-04).
       test: ["CMD", "/opt/conda/bin/curl", "-fsS", "http://127.0.0.1:8080/health"]
       interval: 30s
-      timeout: 5s
-      retries: 3
+      # 20s×5, nie 5s×3: pod decymacją (GIL) /health potrafi odpowiadać
+      # sekundami; za ostra sonda = falszywe unhealthy w srodku joba (09.2026).
+      timeout: 20s
+      retries: 5
       # Stack conda/PDAL startuje wolno — jak office-converter.
       start_period: 60s
     logging:
