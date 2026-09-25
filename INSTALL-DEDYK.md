@@ -90,3 +90,28 @@ share per-org + ORG_SLUGS. (Dziś ręczne; org-provision daemon = backlog.)
 - `staging` — mali goście, VM-w-VM (test)
 - `compact` — 1 VM all-in-one (mały dedyk; DB/redis/minio=kontenery bundla;
   bez Vault/Samba/WG — moduł drive niedostępny)
+
+## Zasada projektowa: LAN klienta NIE jest zaufany (decyzja 2026-09-25)
+
+Serwer stoi w sieci firmy, ale Samba (Drive) i aplikacja są osiągalne
+**wyłącznie przez WireGuard** — także dla komputerów w tym samym LAN-ie.
+Z LAN-u widać tylko UDP WG, a WG bez poprawnego klucza nie odpowiada wcale.
+
+Dlaczego: włamanie do sieci ≠ dostęp do plików (ransomware po SMB 445 to
+realny wektor w biurach); tożsamość per urządzenie (mTLS + TPM w Drive), nie
+per sieć; jedna ścieżka z biura i z domu = jedna polityka (`BARVEA_USER_IN`)
+i jeden audyt. WG na gigabitowym LAN-ie nie jest wąskim gardłem (Revit central
+po WG potwierdzony na prodzie). Bootstrap buduje to identycznie jak w Hetznerze —
+on-prem różni się tylko endpointem WG (adres LAN zamiast publicznego).
+
+Nie robimy trybu „LAN bez WG" w kliencie: litera dysku musi być stała
+(ścieżki Revita), przełączanie trybów gubiłoby ścieżki.
+
+Konsekwencje do obsłużenia przy wdrożeniu u klienta:
+- **skanery biurowe** (scan-to-folder po SMB) nie zrobią WG → scan-to-email
+  albo folder na stacji roboczej synchronizowany Drive'em; drukowanie z LAN
+  działa normalnie (klient → drukarka, bez WG);
+- **hub WG (VM 100)** = pojedynczy punkt: onboot + auto-restart; na jednym
+  fizycznym hoście drugi hub nie daje więcej niż restart VM. Realne HA =
+  drugi host + klient z listą endpointów — dopiero na życzenie klienta;
+- **klient Drive**: lista endpointów (LAN IP → publiczny), nie jeden adres.
