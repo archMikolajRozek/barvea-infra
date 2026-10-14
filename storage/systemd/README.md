@@ -50,11 +50,17 @@ curl.exe -s -r 0-9 -D - -o NUL "https://app.barvea.com/dl/..."   # → 206 + con
 ```
 `curl -I` NIE nadaje się — wysyła HEAD, na którym datad ignoruje Range i zwraca 200.
 
-## TODO IaC (do wyeksportowania do repo — read-only z proda):
-- [ ] Vault bootstrap (PKI Root+Intermediate, transit per-org-keys, AppRole barvea-app/barvea-storage, role device/internal-server) → `vault/bootstrap-vault.sh` idempotentny
-- [ ] iptables BARVEA_USER_IN + nftables host → `network/*.rules`
-- [ ] WireGuard wg-users.conf template (BEZ kluczy) + wg0 admin
-- [ ] ZFS pool+dataset layout (properties: acltype=posixacl xattr=sa encryption)
-- [ ] .env.production → .env.example (nazwy zmiennych, bez wartości)
-- [ ] restic timers 3× VM
-- [ ] master `bootstrap.sh` orkiestrujący
+## Eksport IaC z proda — stan (zweryfikowany 2026-09-01, odhaczony 2026-10-14)
+Lista wisiała jako „TODO" mimo że większość była zrobiona — nieaktualna checklista
+ukrywała jedną prawdziwą lukę wśród sześciu fałszywych alarmów.
+- [x] Vault bootstrap → `vault/bootstrap-vault.sh`
+- [x] nftables host → `network/host-nftables.conf` (wgrywa `bootstrap.sh`); `BARVEA_USER_IN` żyje w `PostUp` `network/wg-users.conf.template`
+- [x] WireGuard templates bez kluczy → `network/wg-users.conf.template`, `network/wg0.conf.template`
+- [x] ZFS pool + właściwości → `bootstrap.sh` (`zpool create -o ashift=12`, `compression=lz4 atime=off xattr=sa acltype=posix`, dataset `orgs`)
+- [x] `.env.example`
+- [x] master `bootstrap.sh`
+- [ ] **restic timers 3× VM — JEDYNA REALNA LUKA.** `grep restic bootstrap.sh` = 0. Świeży serwer
+      wstaje bez backupów. W repo tylko `backup/barvea-backup.host.{service,timer}` + skrypty host/app;
+      brakuje wariantów dla VM 100/101 (na prodzie działają — do ściągnięcia). Blokuje decyzja:
+      czyje repo restic w dedyku (nasz box / wizard pyta / tylko lokalne dumpy).
+- [ ] `docker-prune.timer` (vm102/systemd) — dodane do `svc_app` 2026-10-14, nieprzetestowane na fresh-build

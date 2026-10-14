@@ -72,6 +72,15 @@ i biła się o miejsce z build cachem dockera (rośnie ~37 GB na deploy).
 Szczegóły i trasa pliku: README repo, sekcja „Śluza uploadu".
 
 ## Noty
+- **NVMe leży odłogiem (stan 2026-09-01):** 2× Samsung MZVLB1T0HALR 954 GB w `md2`
+  na `/` hosta — zajęte 5.7 G z 929 G. WSZYSTKIE dyski VM/LXC siedzą na `hddpool`
+  (4× HDD raidz2): Postgres, docker+build cache, śluza uploadu. To domyślna
+  instalacja Hetznera, nigdy nie zrewidowana — nie decyzja. Docelowo (premiera /
+  serwer zapasowy od zera): VM systemowe, Postgres i śluza na NVMe, HDD = dane
+  orgów; opcjonalnie `special vdev` (mirror NVMe) na metadane puli — UWAGA: jego
+  utrata = utrata puli. Te NVMe to OEM bez ochrony przed zanikiem zasilania —
+  pod bazę produkcyjną dokupić z kondensatorami. Decyzja w pamięci sesji
+  (profil dysków dla proda i dedyka — jedna decyzja, nie dwie).
 - **volblocksize nowych zvoli:** pula to `raidz2` na 4 dyskach. Domyślne 8k ze
   storage daje efektywność ~33% (blok 8 KiB zajmuje 24 KiB — stąd `vm-102-disk-0`
   o rozmiarze 80 G zajmujący w puli 331 G). Nowe dyski twórz ręcznie:

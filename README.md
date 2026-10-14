@@ -301,6 +301,13 @@ bo `qm set` bierze domyślne 8k ze storage.
 Powiększenie: `qm disk resize 102 scsi1 +500G` → w gościu `resize2fs /dev/sdb`
 (bez tablicy partycji, więc bez `growpart`).
 
+Punkt odniesienia (2026-09-01, log datad `upload done`): plik 6101 MB →
+**69 MB/s** całość (odbiór 78 s = 88%, fsync+replace 10 s = 12%). Pula wyrabia;
+wąskie gardło to wewnętrzny przerzut app→datad, bo śluza (zvol) i `/hddpool/orgs`
+leżą na tej samej puli raidz2 — odczyt i zapis biją w te same 4 talerze.
+Gdy zacznie uwierać przy 50 GB: śluza na NVMe (host ma 2× 954 GB praktycznie
+nieużywane — patrz proxmox/README „Noty").
+
 ---
 
 ## Sprzątanie po dockerze (VM 102)

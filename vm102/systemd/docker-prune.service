@@ -1,0 +1,13 @@
+[Unit]
+Description=BARVEA: sprzatanie docker build cache i wiszacych obrazow (VM 102)
+# Build cache rosnie ~37 GB na KAZDY deploy (zmierzone 2026-08-31/09-01) i nikt
+# go nie kasowal - dysk root 75 G schodzil z 47 G wolnego do 12 G po jednym
+# deployu. Timer tygodniowy; filtr until=168h zostawia cache z ostatniego
+# tygodnia, zeby najblizszy build appki nie startowal od zera.
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/docker builder prune -f --filter until=168h
+ExecStart=/usr/bin/docker image prune -f

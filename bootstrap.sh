@@ -401,6 +401,11 @@ svc_app() {    # VM 102 — docker + szkielet; DEPLOY APLIKACJI = bundle/deploy.
       chown 1001:1001 /srv/upload-tmp
     else echo '⚠️  brak /dev/sdb — śluza uploadu NIE utworzona (dysk scsi1?)'; fi"
   vm_ssh "$ip" "mkdir -p /home/$CI_USER/barvea && chown $CI_USER: /home/$CI_USER/barvea"
+  # Sprzatanie docker build cache (rosnie ~37 GB na deploy; bez timera root 75 G
+  # zapelnia sie po 2 deployach — prod 2026-08-31).
+  vm_put "$ip" "$REPO_DIR/vm102/systemd/docker-prune.service" /etc/systemd/system/docker-prune.service
+  vm_put "$ip" "$REPO_DIR/vm102/systemd/docker-prune.timer"   /etc/systemd/system/docker-prune.timer
+  vm_ssh "$ip" "systemctl daemon-reload && systemctl enable --now docker-prune.timer"
   vm_put "$ip" "$REPO_DIR/Caddyfile" "/home/$CI_USER/barvea/Caddyfile"
   vm_put "$ip" "$REPO_DIR/docker-compose.yml" "/home/$CI_USER/barvea/docker-compose.yml"
   echo "ℹ️  APLIKACJA: wgraj release-bundle (albo git clone app) + .env.production"
