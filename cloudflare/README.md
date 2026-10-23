@@ -40,6 +40,18 @@ app.barvea.com. Jeśli `X-Real-IP` wyjdzie błędny, naprawa jest w Caddy
 Worker zdejmuje `Cookie` (w górę) oraz `Set-Cookie` i `Strict-Transport-Security`
 (w dół) — plugin to Bearer, a polityki domeny appki nie mają dotyczyć CMS-u.
 
+### Stan wdrożenia
+**2026-10-24 WDROŻONE** (Worker `barvea-plugin-proxy`, konto mikolajrozek, plan Free):
+obie trasy aktywne, `workers.dev` WYŁĄCZONY (byłoby drugie publiczne wejście do appki).
+Test: `barvea.com/api/health` → 200 bez Location; `plugin/me` → 401 (nie 308).
+W CF nie było żadnej Redirect Rule — 308 pochodził z hostingu CMS (.htaccess),
+Worker na edge'u go omija. Kontrola IP klienta: Caddy nie ma access-logu →
+sprawdzić w appce (Ustawienia → Urządzenia: IP przy parowaniu przez barvea.com
+ma być IP użytkownika, nie Cloudflare).
+DNS na marginesie (NIE ruszane): `barvea.com` A → 109.95.157.167 (CMS), ale
+**AAAA → 2a01:4f8:2240:13d5::2 (nasz Hetzner)** — dwa originy dla jednej nazwy;
+`www` A → nasz host (Caddy robi 301 na apex). Do uporządkowania z właścicielem CMS.
+
 ### Limity i wycofanie
 - Body przez proxy CF = limit planu strefy (Free/Pro ~100 MB na żądanie) —
   dotyczy app.barvea.com identycznie; Worker nic nie pogarsza. Free: 100k req/dzień.
