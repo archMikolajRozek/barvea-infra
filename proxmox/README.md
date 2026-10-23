@@ -37,7 +37,7 @@ mp4: /hddpool/orgs/cmpk152ja03z8l90706aew825,mp=/srv/orgs/cmpk152ja03z8l90706aew
 - unprivileged → uid-shift +100000 na hoście (smb-userzy uid 5100+ w LXC =
   105100+ na hoście); ACL działają wewnątrz LXC normalnie.
 
-## VM 100 — barvea-infra (10.10.0.10; WG hub + wg/smb-provisiond)
+## VM 100 — barvea-infra (10.10.0.10; WG hub + wg-provisiond (smb-provisiond jest na LXC 201))
 ```
 q35 / cpu: host / cores: 2 / sockets: 1 / memory: 4096 / agent: 1 / onboot: 1
 scsi0: hdd-pool:vm-100-disk-0,cache=writeback,discard=on,iothread=1,size=50G

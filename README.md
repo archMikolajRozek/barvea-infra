@@ -46,7 +46,7 @@ This repo holds **only configuration** — no application code. App code lives i
 | `docker-compose.yml` | App container + Caddy reverse proxy. NO database/cache/storage — those live on VM 101. |
 | `Caddyfile` | TLS termination, HSTS, upload routing (1 GB limit), `/api/webhooks/*` raw-body, `/api/health` exposed. |
 | `.env.production.example` | Template for prod secrets. Copy, fill, chmod 600 — never commit. |
-| `scripts/bootstrap.sh` | First-time deploy: connectivity check → clone app → build → migrate → MinIO buckets → start. |
+| `scripts/bootstrap.sh` | First-time **app** deploy on VM 102: connectivity check → clone app → build → migrate → MinIO buckets → start. NOT the same as root `./bootstrap.sh` (master infra bootstrap: pool → guests → services; see INSTALL-DEDYK.md). |
 | `scripts/deploy.sh` | Update workflow: pre-deploy backup → git pull → build → migrate deploy → recreate app. |
 | `scripts/backup.sh` | Daily Postgres pg_dump (cron). Retention: 14d daily + Sunday weekly. |
 | `scripts/verify-data-vm.sh` | Sanity check Postgres/Redis/MinIO connectivity + extensions + buckets. |
