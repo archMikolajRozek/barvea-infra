@@ -51,3 +51,13 @@ terminator nie łapie → kolejne komendy lądują W PLIKU (archbimcloud.conf
 miał w ogonie `EOF`+`grep`+`smbcontrol`; Samba ignorowała śmieć — działało,
 wyczyszczone 2026-07-13 sedem `/directory mask = 0700/q`). Przy ręcznych
 heredokach: terminator ZAWSZE od kolumny 0 + weryfikuj `tail` po zapisie.
+
+## Łatki bezpieczeństwa — kto ma unattended-upgrades (stan 2026-10-23)
+Host i VM-ki (obraz cloud Debiana) mają `unattended-upgrades` + timery z pudełka.
+**Szablony LXC (200 Vault, 201 storage) NIE** — LXC 200 stał 5 miesięcy bez
+`apt update`. Naprawione ręcznie 2026-10-23 + dopisane do `bootstrap.sh`
+(pętla LXC). Domyślny config = tylko `Debian-Security`; pakiety spoza Debiana
+(Vault/HashiCorp, docker) nie są ruszane. Uwaga: aktualizacja Samby na 201
+restartuje `smbd` (kilka sekund zerwania sesji Drive) — timer leci ~6:00.
+Kontrola: `systemctl is-active apt-daily-upgrade.timer`, `stat /var/lib/apt/lists`,
+`apt list --upgradable | grep -c security`.

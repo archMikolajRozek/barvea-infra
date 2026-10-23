@@ -214,7 +214,12 @@ phase_guests() {
           -swap 512 -rootfs "$PVE_STORAGE:$disk" -unprivileged 1 -features nesting=1 \
           -net0 "name=eth0,bridge=$BR_LAN,gw=${LAN}.1,ip=$ip/24,type=veth" -onboot 1
       pct start "$id"; sleep 3
-      pct exec "$id" -- bash -c "echo '$ip $name' >> /etc/hosts; apt-get update -qq"
+      # unattended-upgrades: obraz cloud Debiana (VM) ma to z pudelka, szablon LXC NIE.
+      # Prod 2026-10-23: LXC 200 (Vault) 5 miesiecy bez apt update, zero latek security.
+      # Domyslny config = tylko origin Debian-Security (nie rusza Vaulta z repo HashiCorp).
+      pct exec "$id" -- bash -c "echo '$ip $name' >> /etc/hosts; apt-get update -qq
+        DEBIAN_FRONTEND=noninteractive apt-get install -y unattended-upgrades >/dev/null
+        systemctl enable --now apt-daily.timer apt-daily-upgrade.timer"
   done
 
   log "GOŚCIE: VM (cloud-init)"
