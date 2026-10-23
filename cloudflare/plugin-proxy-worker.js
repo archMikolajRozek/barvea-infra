@@ -28,8 +28,14 @@ export default {
     url.hostname = ORIGIN_HOST;
 
     const headers = new Headers(request.headers);
-    // Origin ma wiedzieć, że to shim (diagnostyka w logach appki/Caddy).
+    // Plugin autoryzuje się Bearerem — ciasteczek nie potrzebuje. Nie mieszamy
+    // zakresów domen (barvea.com vs app.barvea.com): Cookie w górę OFF.
+    headers.delete('cookie');
+    // Origin ma wiedzieć, że to shim (diagnostyka w logach appki/Caddy) i jaki
+    // był prawdziwy klient — gdyby subrequest nie zachował CF-Connecting-IP,
+    // rate-limit appki widziałby cały ruch legacy jako jeden adres.
     headers.set('X-Barvea-Legacy-Host', 'barvea.com');
+    headers.set('X-Barvea-Client-IP', request.headers.get('cf-connecting-ip') || '');
 
     const init = {
       method: request.method,
@@ -41,7 +47,12 @@ export default {
     }
 
     const resp = await fetch(url.toString(), init);
-    // Odpowiedź bez modyfikacji (status, nagłówki, strumień).
-    return new Response(resp.body, resp);
+    // Odpowiedź 1:1 (status + strumień), minus nagłówki, które nie mogą się
+    // przykleić do domeny CMS-u: Set-Cookie (zakres app.barvea.com) i HSTS
+    // appki (includeSubDomains/preload — polityka naszej domeny, nie CMS-u).
+    const out = new Headers(resp.headers);
+    out.delete('set-cookie');
+    out.delete('strict-transport-security');
+    return new Response(resp.body, { status: resp.status, statusText: resp.statusText, headers: out });
   },
 };
