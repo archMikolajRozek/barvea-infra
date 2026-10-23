@@ -33,8 +33,10 @@ curl.exe -s -D - -o NUL https://barvea.com/api/v1/plugin/me       # 401 (bez tok
 # initiate → zatwierdzenie → status; multipart POST cde/upload → 201.
 ```
 Kontrola IP (żeby rate-limit nie zlał legacy w jeden adres): w logu Caddy/appki
-dla żądania przez barvea.com `X-Real-IP` ma być IP klienta, nie IP Cloudflare;
-Worker dokłada `X-Barvea-Client-IP` z `cf-connecting-ip` jako źródło prawdy.
+dla żądania przez barvea.com `X-Real-IP` ma być IP klienta, nie IP Cloudflare.
+Worker celowo NIE dokłada własnego nagłówka z IP — byłby spoofowalny wprost na
+app.barvea.com. Jeśli `X-Real-IP` wyjdzie błędny, naprawa jest w Caddy
+(trusted_proxies = zakresy Cloudflare), nie w Workerze.
 Worker zdejmuje `Cookie` (w górę) oraz `Set-Cookie` i `Strict-Transport-Security`
 (w dół) — plugin to Bearer, a polityki domeny appki nie mają dotyczyć CMS-u.
 

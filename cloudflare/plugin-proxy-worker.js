@@ -31,11 +31,13 @@ export default {
     // Plugin autoryzuje się Bearerem — ciasteczek nie potrzebuje. Nie mieszamy
     // zakresów domen (barvea.com vs app.barvea.com): Cookie w górę OFF.
     headers.delete('cookie');
-    // Origin ma wiedzieć, że to shim (diagnostyka w logach appki/Caddy) i jaki
-    // był prawdziwy klient — gdyby subrequest nie zachował CF-Connecting-IP,
-    // rate-limit appki widziałby cały ruch legacy jako jeden adres.
+    // Origin ma wiedzieć, że to shim (diagnostyka w logach appki/Caddy).
+    // Tylko diagnostyka — appka NIE MOŻE na tym nagłówku opierać decyzji,
+    // bo każdy może go wysłać wprost na app.barvea.com.
     headers.set('X-Barvea-Legacy-Host', 'barvea.com');
-    headers.set('X-Barvea-Client-IP', request.headers.get('cf-connecting-ip') || '');
+    // IP klienta: ŻADNEGO własnego nagłówka (byłby spoofowalny). Zostaje
+    // CF-Connecting-IP ustawiany przez Cloudflare → Caddy X-Real-IP. Czy
+    // subrequest Workera go zachowuje, sprawdza akceptacja (README).
 
     const init = {
       method: request.method,
