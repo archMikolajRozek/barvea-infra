@@ -33,6 +33,7 @@ APP_IMAGE="barvea-app:$VERSION"       # VERSION = TAG obrazu (nie build-arg; APP
 DWG_IMAGE="barvea-dwg-converter:$VERSION"
 OFFICE_IMAGE="barvea-office-converter:$VERSION"
 PCP_IMAGE="barvea-point-cloud-preview:$VERSION"
+COLLAB_IMAGE="barvea-collab:$VERSION"
 
 log() { printf '\n\033[1;36m── %s\033[0m\n' "$*"; }
 die() { printf '\033[1;31mFATAL: %s\033[0m\n' "$*" >&2; exit 1; }
@@ -82,6 +83,18 @@ else
   die "brak $APP_SRC/docker/point-cloud-preview/Dockerfile"
 fi
 
+# ── 2d. collab (wspoledycja; kontekst = CALY $APP_SRC, plik collab-server/Dockerfile) ─
+#      TODO APP: compose.dedicated.yml bez uslugi collab — do czasu dodania
+#      wspoledycja w dedyku wylaczona (brak COLLAB_* = tryb jednego edytora).
+#      Reverse proxy klienta musi przepuszczac WebSocket /_collab (bez idle
+#      timeout < 60 s) i blokowac /api/v1/internal/*; sekrety = deploy-app.dedicated.sh.
+if [ -f "$APP_SRC/collab-server/Dockerfile" ]; then
+  log "build $COLLAB_IMAGE"
+  docker build -f "$APP_SRC/collab-server/Dockerfile" -t "$COLLAB_IMAGE" "$APP_SRC"
+else
+  die "brak $APP_SRC/collab-server/Dockerfile"
+fi
+
 # ── 3. Pull obrazów bazowych (dla air-gap = zapisane w images.tar) ─
 log "pull obrazów bazowych"
 for img in "$PG_IMAGE" "$REDIS_IMAGE" "$MINIO_IMAGE"; do
@@ -91,7 +104,7 @@ done
 # ── 4. docker save wszystkiego → images.tar ────────────────────────
 log "docker save → images.tar"
 # shellcheck disable=SC2086
-docker save $APP_IMAGE $DWG_IMAGE $OFFICE_IMAGE $PCP_IMAGE "$PG_IMAGE" "$REDIS_IMAGE" "$MINIO_IMAGE" \
+docker save $APP_IMAGE $DWG_IMAGE $OFFICE_IMAGE $PCP_IMAGE $COLLAB_IMAGE "$PG_IMAGE" "$REDIS_IMAGE" "$MINIO_IMAGE" \
   -o "$OUT/images.tar"
 
 # ── 5. Compose + env-template z repo APP (ścieżki APP CONFIRM) ─────
@@ -111,7 +124,7 @@ log "manifest"
   echo "version=$VERSION"
   echo "buildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"
   echo "deploymentMode=dedicated"
-  echo "images=$APP_IMAGE $DWG_IMAGE $OFFICE_IMAGE $PCP_IMAGE $PG_IMAGE $REDIS_IMAGE $MINIO_IMAGE"
+  echo "images=$APP_IMAGE $DWG_IMAGE $OFFICE_IMAGE $PCP_IMAGE $COLLAB_IMAGE $PG_IMAGE $REDIS_IMAGE $MINIO_IMAGE"
   echo "sha256(images.tar)=$(sha256sum "$OUT/images.tar" | cut -d' ' -f1)"
 } > "$OUT/MANIFEST.txt"
 cat "$OUT/MANIFEST.txt"

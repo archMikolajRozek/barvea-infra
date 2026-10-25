@@ -73,6 +73,37 @@ app.barvea.com {
         respond 404
     }
 
+    # ─── Wewnętrzne API współedycji — nigdy z internetu ───
+    # barvea-collab woła app:3005 bezpośrednio po sieci docker (barvea_collab);
+    # przez Caddy ma być 404 (jak @driveInternal). `path /x/*` NIE łapie gołego
+    # `/x` — stąd oba wzorce.
+    @collabInternal path /api/v1/internal /api/v1/internal/*
+    handle @collabInternal {
+        respond 404
+    }
+
+    # ─── Współedycja (barvea-collab, WebSocket) ───
+    # /_collab — slug organizacji nie może zaczynać się od `_`, brak kolizji
+    # z /<orgSlug>. Token idzie w pierwszej wiadomości WS, nie w URL (nie trafia
+    # do access.log). Caddy 2 przepuszcza Upgrade: websocket sam.
+    @collab path /_collab /_collab/*
+    handle @collab {
+        uri strip_prefix /_collab
+        reverse_proxy collab:1234 {
+            # NADPISANIE (nie dopisanie): collab liczy limit gniazd na IP z
+            # X-Real-IP; {client_ip} = realny użytkownik (trusted_proxies CF +
+            # Cf-Connecting-Ip w opcjach globalnych).
+            header_up X-Real-IP {client_ip}
+            # caddy reload nie zrywa od razu otwartych gniazd (klienci i tak wznawiają)
+            stream_close_delay 5m
+            transport http {
+                dial_timeout 10s
+                # BEZ read/write_timeout — 120 s z catch-all ucinałoby bezczynne
+                # gniazda; serwer sam pinguje co 30 s (< ~100 s idle Cloudflare).
+            }
+        }
+    }
+
     # ─── Signed downloads — CDE files streamed from the data-plane ───
     # /dl/<HMAC-token> — token (TTL 15 min) minted by barvea-datad via
     # GET /signed-download; self-contained, verified by the daemon.
@@ -232,6 +263,12 @@ https://app.barvea.internal {
         -Server
         -X-Powered-By
     }
+    # Wewnętrzne API współedycji — 404 także od strony WG/LAN (collab woła app
+    # po sieci docker). `respond` ma wyższy priorytet niż reverse_proxy.
+    # /_collab tu celowo NIE ma: współedycja tylko przez app.barvea.com
+    # (COLLAB_ALLOWED_ORIGINS); zmiana = decyzja APP + dopisanie originu.
+    @collabInternal path /api/v1/internal /api/v1/internal/*
+    respond @collabInternal 404
     reverse_proxy app:3005 {
         header_up X-Real-IP {client_ip}
         header_up Host {host}

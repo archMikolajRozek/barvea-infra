@@ -33,6 +33,9 @@ services:
       DWG_CONVERTER_URL: "http://dwg-converter:8080"
       OFFICE_CONVERTER_URL: "http://office-converter:8080"
       POINT_CLOUD_PREVIEW_URL: "http://point-cloud-preview:8080"
+      # Współedycja: port kontroli collab (flush/unlock/broadcast) — nigdy przez Caddy.
+      # Reszta COLLAB_* (PUBLIC_URL, SERVICE_TOKEN, JWT_*) z .env.production przez env_file.
+      COLLAB_INTERNAL_URL: "http://collab:1235"
       # Upload kawałkowy: kawałki lądują tu do czasu finalizacji (aplikacja
       # skleja CAŁY plik lokalnie, bo datad ma tylko POST /files — bez offsetu
       # i wznowień). Katalog MUSI pomieścić największe pliki (chmury punktów).
@@ -49,6 +52,7 @@ services:
     networks:
       - barvea_web        # Caddy + egress (Postgres/Redis/MinIO/datad po SNAT)
       - barvea_internal   # sidecary (bez egressu)
+      - barvea_collab     # collab → app:3005 (API wewnętrzne) i app → collab:1235
     depends_on:
       dwg-converter:
         condition: service_healthy
@@ -261,6 +265,72 @@ services:
         max-file: "3"
 
   # ───────────────────────────────────────────────────────────
+  # Współedycja Barvea Documents / Sheets (Hocuspocus 4.7.1, Node 24).
+  # WebSocket :1234 tylko przez Caddy (/_collab), kontrola :1235 tylko z app.
+  # Parsuje niezaufane aktualizacje Yjs z internetu → pełny hardening jak
+  # konwertery + osobna sieć bez egressu (widzi tylko caddy i app).
+  # Źródłem prawdy pozostaje aplikacja: collab trzyma stan w RAM i zapisuje
+  # go przez /api/v1/internal/collab/* co 2–10 s. SIGTERM: zapis ≤20 s +
+  # spool na wolumen — stąd stop_grace_period 30s i kolejność w deploy.sh:
+  # NAJPIERW collab (zapisuje przez jeszcze działającą appkę), POTEM app.
+  # Kontrakt: app/docs/BARVEA_COAUTHORING_PLAN.md + serwer/BARVEA_COLLAB_INFRA_HANDOFF.md
+  # ───────────────────────────────────────────────────────────
+  collab:
+    build:
+      context: ./app                      # [WYMAGANE] cały app: obraz kompiluje lib/collab/contracts.ts
+      dockerfile: collab-server/Dockerfile # kontekst filtruje collab-server/Dockerfile.dockerignore (biała lista)
+    image: barvea-collab:latest
+    container_name: barvea-collab
+    restart: unless-stopped
+    user: "57439:57439"
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 256
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    # 1g ↔ `node --max-old-space-size=768` w CMD obrazu (flaga CLI wygrywa z
+    # NODE_OPTIONS, dlatego NODE_OPTIONS tu celowo NIE ma — jedno źródło prawdy).
+    # Zmiana mem_limit = zmiana tej flagi w Dockerfile (APP), nie tylko tutaj.
+    mem_limit: 1g
+    stop_grace_period: 30s
+    environment:
+      HOME: "/tmp"
+      NODE_ENV: "production"
+      COLLAB_APP_URL: "http://app:3005"
+      COLLAB_ALLOWED_ORIGINS: "https://app.barvea.com"
+      COLLAB_SPOOL_DIR: "/data/spool"
+      # X-Real-IP ustawia Caddy z {client_ip}; {client_ip} = realny użytkownik, bo
+      # globalne opcje Caddy mają trusted_proxies (zakresy CF) + client_ip_headers
+      # Cf-Connecting-Ip. Bez tego limit 30 gniazd/IP zlałby wszystkich w edge CF.
+      COLLAB_TRUST_X_REAL_IP: "1"
+      COLLAB_LOG_LEVEL: "info"
+      # Sekrety WYŁĄCZNIE przez interpolację z .env.production (jak POINTCLOUD_PREVIEW_TOKEN).
+      # NIGDY env_file dla sidecara — dostałby DATABASE_URL, Stripe itd.
+      # :- (nie :?) — brak zmiennej nie może wywracać `compose run … migrate`;
+      # collab sam odmawia startu bez nich (restart-loop = brak sekretów).
+      COLLAB_SERVICE_TOKEN: "${COLLAB_SERVICE_TOKEN:-}"
+      COLLAB_JWT_PUBLIC_KEY: "${COLLAB_JWT_PUBLIC_KEY:-}"
+    volumes:
+      # Named volume (nie bind): pusty wolumen dziedziczy właściciela 57439 z
+      # obrazu (/data/spool chown w Dockerfile). Zwykle pusty — *.ystate tylko
+      # gdy przy SIGTERM appka nie odpowiadała.
+      - collab_spool:/data/spool
+    networks:
+      - barvea_collab
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:1235/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+  # ───────────────────────────────────────────────────────────
   # Caddy reverse proxy + auto Let's Encrypt
   # Listens publicly on 80/443 (DNAT'd from 10.10.0.10 by barvea-infra).
   # Terminates TLS, proxies to app:3005.
@@ -280,6 +350,7 @@ services:
       - caddy_config:/config
     networks:
       - barvea_web
+      - barvea_collab     # caddy → collab:1234 (/_collab WebSocket)
     depends_on:
       app:
         condition: service_healthy
@@ -300,9 +371,20 @@ networks:
     driver: bridge
     internal: true
     name: barvea_internal
+  # Współedycja: caddy ↔ collab ↔ app. internal: true = collab bez egressu.
+  # NIE dokładać collab do barvea_internal: konwertery nie mają widzieć collab,
+  # caddy nie ma widzieć konwerterów. (Uwaga: konwertery na barvea_internal
+  # dosięgają app:3005, więc /api/v1/internal/* od ich strony chroni wyłącznie
+  # Bearer COLLAB_SERVICE_TOKEN + odrzucanie śladów proxy po stronie appki.)
+  barvea_collab:
+    driver: bridge
+    internal: true
+    name: barvea_collab
 
 volumes:
   caddy_data:
     name: barvea_caddy_data
   caddy_config:
     name: barvea_caddy_config
+  collab_spool:
+    name: barvea_collab_spool

@@ -140,6 +140,16 @@ for svc in dwg-converter office-converter point-cloud-preview; do
   fi
 done
 
+# collab (wspoledycja): build nie-fatalny jak konwertery. Kontekst = caly ./app
+# (obraz kompiluje lib/collab/contracts.ts), filtrowany biala lista z
+# collab-server/Dockerfile.dockerignore.
+COLLAB_FAILED=0
+echo ">>> Building collab image..."
+if ! docker compose --env-file .env.production build collab; then
+  COLLAB_FAILED=1
+  echo "WARN: collab build FAILED — old container keeps running; retry deploy later"
+fi
+
 # ─── 3. Run migrations ───
 # Prisma CLI is installed at /opt/prisma-cli inside the runtime image (see
 # the app Dockerfile) and symlinked to /usr/local/bin/prisma. Calling the
@@ -168,6 +178,22 @@ for svc in dwg-converter office-converter point-cloud-preview; do
   echo ">>> up $svc (compose recreates only if image/config changed)..."
   docker compose --env-file .env.production up -d --no-deps "$svc"
 done
+# collab PRZED app i NIGDY razem: SIGTERM collab zapisuje dokumenty (<=20 s)
+# przez jeszcze dzialajaca, stara appke; czego nie zdazy, zrzuca do spoolu.
+# Bez --force-recreate: compose odtwarza tylko przy zmianie obrazu/konfiguracji
+# (kazde odtworzenie = krotkie zerwanie sesji wspoledycji; klienci wznawiaja sami).
+if [[ $COLLAB_FAILED -eq 0 ]]; then
+  echo ">>> up collab (recreate only if image/config changed; SIGTERM flush <=20 s)..."
+  docker compose --env-file .env.production up -d --no-deps collab
+  for i in {1..18}; do
+    if docker compose ps collab | grep -q "(healthy)"; then echo "collab: healthy"; break; fi
+    sleep 5
+    if [[ $i -eq 18 ]]; then
+      echo "WARN: collab not healthy after 90 s — app recreate continues (app works without collab)"
+      docker compose logs --tail 30 collab
+    fi
+  done
+fi
 echo ">>> Recreating app container..."
 docker compose --env-file .env.production up -d --no-deps --force-recreate app
 
@@ -208,7 +234,7 @@ echo "OK: /api/health returned 200"
 # gdy komplet buildow przeszedl. Kazde wczesniejsze wyjscie oraz fail
 # konwertera zostawia stary SHA w pliku, wiec ponowny deploy.sh widzi
 # roznice i dokancza (build appki wtedy leci z cache w sekundy).
-if [[ ${#CONVERTER_FAILED[@]} -eq 0 ]]; then
+if [[ ${#CONVERTER_FAILED[@]} -eq 0 && $COLLAB_FAILED -eq 0 ]]; then
   echo "$NEW_SHA" > "$STATE_FILE"
 fi
 
@@ -216,6 +242,7 @@ echo ""
 echo "═══════════════════════════════════════════════════════════════"
 echo "Deploy complete: $PREVIOUS_SHA → $NEW_SHA"
 echo "Backup retained: $BACKUP_DIR"
+if [[ $COLLAB_FAILED -eq 1 ]]; then CONVERTER_FAILED+=("collab"); fi
 if [[ ${#CONVERTER_FAILED[@]} -gt 0 ]]; then
   echo "⚠️  UWAGA: build padl dla: ${CONVERTER_FAILED[*]} — stare kontenery"
   echo "   dzialaja dalej. Odpal deploy.sh ponownie, gdy Docker Hub wroci"
