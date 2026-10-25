@@ -1,5 +1,14 @@
 # Współedycja (barvea-collab) — runbook wdrożenia infra (2026-10-25)
 
+**STAN: WDROŻONE 2026-10-25 ~21:30.** Kolejność faktyczna: deploy.sh (zwykły, z migracją
+`native_collab`) → pull infra → `compose config -q` + `caddy validate` (z montażem
+`/etc/ssl/barvea`, inaczej fałszywy błąd o root-ca.crt) → sekrety przez `collab-keys.mjs |
+sed -n '2,4p' >> .env.production` (klucze nigdy na ekranie) → `build collab` + `up collab`
+(healthy, `collab.started`) → recreate `caddy` (nowa sieć; health 200, „Welcome to
+Hocuspocus!") → recreate `app` (COLLAB_* + sieć; `{"ok":true}` z collab:1235 z wnętrza appki).
+Cloudflare: WebSockets = On (plan Free). Gotcha: `deploy.sh` po świeżym deployu mówi
+„No changes" — pierwsze wdrożenie collab ręcznie, kolejne już przez deploy.sh.
+
 Kontrakt APP: `serwer/BARVEA_COLLAB_INFRA_HANDOFF.md` (+ `app/docs/BARVEA_COAUTHORING_PLAN.md`).
 Zmiany w repo (commit „collab: …"): `docker-compose.yml` (usługa `collab`, sieć `barvea_collab`,
 wolumen `collab_spool`, `app`/`caddy` w nowej sieci, `COLLAB_INTERNAL_URL`), `Caddyfile`
