@@ -190,6 +190,8 @@ app.barvea.com {
     # ─── Healthcheck: exposed without rate limit (for monitoring) ───
     handle /api/health {
         reverse_proxy app:3005 {
+            # spójność: X-Real-IP = {client_ip} na KAŻDEJ trasie do app (mobile 10.2026)
+            header_up X-Real-IP {client_ip}
             transport http {
                 read_timeout 10s
             }
