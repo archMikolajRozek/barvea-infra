@@ -13,7 +13,12 @@ bez nowych portów/usług). Poniżej potwierdzenia, korekty i to, co faktycznie 
 - `X-Forwarded-For {remote_host}` celowo zostaje IP przeskoku (CF). **App ma czytać `X-Real-IP`**
   i tylko to; XFF nie zmieniamy, żeby nie ruszać semantyki istniejących logów/audytu.
 
-## 2. Cloudflare a klient bez JS/ciasteczek — DO SPRAWDZENIA W PANELU (plan Free)
+## 2. Cloudflare a klient bez JS/ciasteczek — SPRAWDZONE I USTAWIONE 2026-10-28
+Stan panelu: Bot Fight Mode **OFF**, Rate Limiting **brak**, Managed ruleset on (nie
+challenge'uje API), Browser Integrity Check był **ON** → dodana **Configuration Rule
+`mobile-api-no-challenge`**: `http.host eq "app.barvea.com" and (starts_with path "/api/"
+or "/dl/" or "/.well-known/")` → Browser Integrity Check **Off**. (Security Level na Free
+nie jest dostępny w Configuration Rules — pominięty.) Oryginalne ryzyka niżej dla kontekstu:
 Ryzyka na Free, których nie da się obejść per-ścieżka:
 - **Bot Fight Mode** (Security → Bots): na Free nie ma reguł „skip" — klient okhttp/URLSession
   potrafi dostać challenge. Jeśli włączony → **wyłączyć** (ochronę zostawiamy limitom appki).
@@ -38,7 +43,11 @@ Matchery Caddy są per ścieżka, nie per ciasteczko: `@uploads` (1 GB/żądanie
 
 ## 5. `/dl/` — bez zmian (TTL 900 s, Range od 2026-08).
 
-## 6. Egress do FCM/APNs — NIC DO ZROBIENIA
+## 6. Egress do FCM/APNs — POTWIERDZONE TESTEM 2026-10-28
+`fcm.googleapis.com` / `oauth2.googleapis.com` → HTTP 404 (dotarliśmy), `api.push.apple.com`
+→ HTTP 405 po IPv4. **Gotcha:** busybox `wget` w kontenerze dał „Network unreachable" dla APNs —
+hostname ma rekordy AAAA, VM 102 nie ma IPv6, busybox nie robi fallbacku. Node 20+ ma
+`autoSelectFamily` → OK; **APP: klient APNs/http2 musi mieć fallback IPv4 (albo wymusić IPv4)**.
 VM 102 nie ma firewalla wyjściowego; kontener `app` jest na `barvea_web` z egressem (tak samo
 idą Stripe, SMTP, apt). Sieci `internal: true` dotyczą tylko sidecarów. Test potwierdzający w
 runbooku niżej. Nic przychodzącego nie otwieramy.
