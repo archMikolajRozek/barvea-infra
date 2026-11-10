@@ -1,5 +1,15 @@
 # Drive: DNS w tunelu wg-users + poprawki veto — runbook (2026-11-10)
 
+**STAN: WDROŻONE 2026-11-10.** dnsmasq na VM 100 nasłuchuje na 10.67.0.1:53 (+loopback,
+nieszkodliwe), NIE na 10.10.0.10; app/drive → 10.10.0.30/.40, google → NXDOMAIN; reguły INPUT 53
+trwale w wg-users.conf (4 linie). Test z klienta Drive (tunel wg-users): `nslookup app.barvea.internal
+10.67.0.1` → 10.10.0.30 ✓. Samba: `delete veto files = No` (domyślne → testparm go NIE wypisuje —
+grep na tę linię daje 0, to jest OK), acl-sync bez kategorii office, reload bez restartu.
+Gotchas: (1) `apt-get install dnsmasq` STARTUJE daemon z domyślnym configiem = otwarty rekursywny
+resolver na 0.0.0.0:53 — plik do /etc/dnsmasq.d/ wgrać PRZED instalacją albo od razu `stop`;
+(2) peer WG bez `10.67.0.1/32` w AllowedIPs nie wyśle zapytania do tunelu (timeout) — stare peery
+trzeba uzupełnić, nowe dostają z DRIVE_WG_ALLOWED_IPS; (3) grep na wg-users.conf wymaga sudo (0600).
+
 Źródło: prośba czatu Drive (Mac nie rozwiązuje *.barvea.internal; `delete veto files = yes`
 grozi utratą danych; kategoria veto „office" psuje Word/Excel na B:).
 
