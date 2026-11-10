@@ -124,12 +124,13 @@ VETO_CATEGORY = {
                 "desktop.ini", "$RECYCLE.BIN"],
     "macos": [".DS_Store", "._*", ".Spotlight-V100", ".Trashes",
               ".fseventsd", ".TemporaryItems"],
-    "office": ["~$*", ".~lock.*"],
+    # "office" (~$*, .~lock.*) USUNIĘTE 2026-11-10: veto na pliki blokad psuje
+    # Worda/Excela na B: (nie mogą założyć ~$lock). Śmieci sprząta klient.
     "executables": ["*.exe", "*.scr", "*.bat", "*.cmd", "*.com", "*.pif",
                     "*.vbs", "*.js", "*.jse", "*.wsf", "*.msi", "*.jar",
                     "*.ps1", "*.lnk"],
 }
-VETO_ORDER = ["windows", "macos", "office", "executables"]
+VETO_ORDER = ["windows", "macos", "executables"]   # "office" wycofane (patrz wyżej)
 # Globalna lista bezpieczeństwa (= /etc/samba/barvea-veto.conf, włączana z
 # [global]). Share-level `veto files` NADPISUJE global (Samba nie scala), więc
 # per-org veto MUSI ją zawierać, inaczej włączenie kategorii przez APP
@@ -184,7 +185,9 @@ def apply_veto(slug, manifest):
         veto = "/" + "/".join(pats) + "/"
         desired = ("# BARVEA veto — zarządzane przez acl-sync, NIE edytuj\n"
                    f"   veto files = {veto}\n"
-                   "   delete veto files = yes\n")
+                   # no (2026-11-10): yes kasowało po cichu vetowane pliki przy
+                   # usuwaniu katalogu przez SMB — w webie dalej widoczne = utrata danych
+                   "   delete veto files = no\n")
     else:
         desired = "# BARVEA veto: OFF (disabled / brak kategorii)\n"
     try:

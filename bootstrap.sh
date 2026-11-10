@@ -266,7 +266,7 @@ phase_guests() {
 svc_infra() {  # VM 100 — WG hub + wg-provisiond
   local ip="${LAN}.10"
   # nftables: PostUp wg0 (tabela wg_nat) — cloud-image go NIE ma (run3 staging)
-  vm_ssh "$ip" "DEBIAN_FRONTEND=noninteractive apt-get install -y wireguard iptables nftables python3 >/dev/null
+  vm_ssh "$ip" "DEBIAN_FRONTEND=noninteractive apt-get install -y wireguard iptables nftables python3 dnsmasq >/dev/null
     sysctl -w net.ipv4.ip_forward=1; echo net.ipv4.ip_forward=1 > /etc/sysctl.d/99-wg.conf
     umask 077; cd /etc/wireguard
     [ -f server_private.key ] || { wg genkey | tee server_private.key | wg pubkey > server_public.key; }
@@ -281,6 +281,9 @@ svc_infra() {  # VM 100 — WG hub + wg-provisiond
       -e "s|10\.9\.0\.0/24|$WG0_CIDR|g" -e "s|10\.9\.0\.1/24|$WG0_ADDR|" \
       -e "s|51820|$WG0_PORT|" \
       "$REPO_DIR/network/wg0.conf.template" > "$T"; vm_put "$ip" "$T" /etc/wireguard/wg0.conf; rm -f "$T"
+  # DNS tunelu wg-users: *.barvea.internal → app/storage (macOS Drive nie ma hosts). Tylko na wg-users.
+  vm_put "$ip" "$REPO_DIR/network/dnsmasq-wg-users.conf" /etc/dnsmasq.d/wg-users.conf
+  vm_ssh "$ip" "systemctl enable --now dnsmasq; systemctl restart dnsmasq"
   vm_put "$ip" "$REPO_DIR/wg-control/wg-provisiond.py" /usr/local/sbin/wg-provisiond.py
   vm_put "$ip" "$REPO_DIR/wg-control/wg-provisiond.service" /etc/systemd/system/wg-provisiond.service
   local WGTOK; WGTOK=$(gen); cred "WG_PROVISIOND_TOKEN=$WGTOK"
