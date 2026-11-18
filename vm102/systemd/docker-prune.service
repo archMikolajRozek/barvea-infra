@@ -9,5 +9,7 @@ Requires=docker.service
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/docker builder prune -f --filter until=168h
+# 72h (bylo 168h): przy kilku deployach tygodniowo cache odrastal do 42 GB
+# miedzy przebiegami (2026-11-19). 3 dni cache = najblizszy build nadal szybki.
+ExecStart=/usr/bin/docker builder prune -f --filter until=72h
 ExecStart=/usr/bin/docker image prune -f

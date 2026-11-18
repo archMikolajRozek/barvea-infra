@@ -69,7 +69,7 @@ else
                "201 storage  ${LAN}.40 4 16384 - 16 storage" )   # 16G: Samba+datad+clamd (sygnatury ~1.5G), host ma zapas
   GUESTS_VM=(  "100 barvea-infra ${LAN}.10 2 4096  -    50  infra 1"
                "101 barvea-data  ${LAN}.20 4 24576 8192 200 data  2"
-               "102 barvea-app   ${LAN}.30 8 16384 -    80  app   3" )   # 8c/16G od 2026-09-07: PDAL+LibreOffice+build Nexta naraz; bez balloona (OOM 2026-09-05)
+               "102 barvea-app   ${LAN}.30 8 24576 -    80  app   3" )   # 8c/24G od 2026-11-19 (suma mem_limit sidecarow 19G + appka); bez balloona (OOM 2026-09-05)
   UPLOAD_TMP_GB=1000
 fi
 

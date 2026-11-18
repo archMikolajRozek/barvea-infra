@@ -2,7 +2,7 @@
 
 | Unit | Rola |
 |---|---|
-| `docker-prune.service` + `.timer` | niedziela 04:30: `docker builder prune --filter until=168h` + `image prune`. Build cache rośnie ~37 GB na deploy; bez tego root (75 G) zapełnia się po 2 deployach. |
+| `docker-prune.service` + `.timer` | niedziela 04:30: `docker builder prune --filter until=72h` + `image prune`. Build cache rośnie ~37 GB na deploy; bez tego root (75 G) zapełnia się po 2 deployach. |
 
 Instalacja (bootstrap `svc_app` robi to samo):
 ```bash
