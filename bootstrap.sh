@@ -219,6 +219,9 @@ phase_guests() {
       # Domyslny config = tylko origin Debian-Security (nie rusza Vaulta z repo HashiCorp).
       pct exec "$id" -- bash -c "echo '$ip $name' >> /etc/hosts; apt-get update -qq
         DEBIAN_FRONTEND=noninteractive apt-get install -y unattended-upgrades >/dev/null
+        printf 'APT::Periodic::Update-Package-Lists \"1\";
+APT::Periodic::Unattended-Upgrade \"1\";
+' > /etc/apt/apt.conf.d/20auto-upgrades
         systemctl enable --now apt-daily.timer apt-daily-upgrade.timer"
   done
 

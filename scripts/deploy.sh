@@ -69,6 +69,9 @@ if [[ ! -s "$BACKUP_FILE" ]]; then
   exit 1
 fi
 echo "Backup: $BACKUP_FILE ($(stat -c%s "$BACKUP_FILE" 2>/dev/null || stat -f%z "$BACKUP_FILE") bytes)"
+# Retencja dumpow pre-deploy: zostaw 30 najnowszych (2026-11-19: 378 szt. po
+# pol roku — male, ale rosna bez konca). Nocne backup.sh ma wlasna retencje.
+ls -1dt "$INFRA_DIR"/backups/*_pre_deploy 2>/dev/null | tail -n +31 | xargs -r rm -rf
 
 # ─── 1. Pull latest ───
 echo ">>> Pulling latest from $APP_REPO_BRANCH..."
