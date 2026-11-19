@@ -111,14 +111,19 @@ img_id() { docker image inspect "$1" --format '{{.Id}}' 2>/dev/null || echo "non
 
 CONVERTER_RECREATE=()
 CONVERTER_FAILED=()
-for svc in dwg-converter office-converter point-cloud-preview; do
+for svc in dwg-converter office-converter point-cloud-preview ifc-clash; do
   # point-cloud-preview: scratch NA DUZYM DYSKU musi istniec i nie moze byc
   # root-owned ZANIM kontener wstanie. Docker sam tworzy brakujacy katalog
   # bind-mountu jako root:755, a wtedy CPython PO CICHU pomija niezapisywalny
   # TMPDIR i wraca do /tmp w overlayu na dysku root — czyli dokladnie awaria,
   # przed ktora TMPDIR mial chronic, tylko bezobjawowo. Lepiej glosno pominac.
-  if [[ "$svc" == "point-cloud-preview" ]]; then
-    SCRATCH=/srv/upload-tmp/pcp-scratch
+  # ifc-clash (kolizje, K1 2026-11): ten sam wzorzec — stan zadan + kopie IFC na scratch.
+  SCRATCH=""
+  case "$svc" in
+    point-cloud-preview) SCRATCH=/srv/upload-tmp/pcp-scratch ;;
+    ifc-clash)           SCRATCH=/srv/upload-tmp/clash-scratch ;;
+  esac
+  if [[ -n "$SCRATCH" ]]; then
     if [[ ! -d "$SCRATCH" || "$(stat -c %u "$SCRATCH")" == "0" ]]; then
       echo "WARN: $SCRATCH brak lub root-owned — pomijam $svc."
       echo "      Napraw (uid sprawdz: docker compose run --rm --no-deps $svc id -u):"
@@ -172,7 +177,7 @@ docker compose --env-file .env.production run --rm --no-deps app prisma migrate 
 # brak zmian = kontener nietknięty (bez zimnego startu). Wcześniejsze
 # porównanie ID obrazu gubiło zmiany samej konfiguracji (hardening 09.2026).
 # Pomijamy tylko te, których build padł (stary kontener jedzie dalej).
-for svc in dwg-converter office-converter point-cloud-preview; do
+for svc in dwg-converter office-converter point-cloud-preview ifc-clash; do
   if printf '%s
 ' "${CONVERTER_FAILED[@]}" | grep -qx "$svc"; then
     echo ">>> $svc: build failed earlier — leaving running container as is"

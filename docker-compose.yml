@@ -33,6 +33,10 @@ services:
       DWG_CONVERTER_URL: "http://dwg-converter:8080"
       OFFICE_CONVERTER_URL: "http://office-converter:8080"
       POINT_CLOUD_PREVIEW_URL: "http://point-cloud-preview:8080"
+      # Kolizje IFC (K1) + kalibracja danych OUT-53 (BBOX): sidecar ifc-clash. Bez
+      # IFC_CLASH_URL moduł Kolizje jest ciemny (409 „silnik nie jest uruchomiony”).
+      # IFC_CLASH_TOKEN z .env.production (env_file). Rollback = usunąć tę linię + recreate app.
+      IFC_CLASH_URL: "http://ifc-clash:8080"
       # Współedycja: port kontroli collab (flush/unlock/broadcast) — nigdy przez Caddy.
       # Reszta COLLAB_* (PUBLIC_URL, SERVICE_TOKEN, JWT_*) z .env.production przez env_file.
       COLLAB_INTERNAL_URL: "http://collab:1235"
@@ -64,6 +68,8 @@ services:
         condition: service_started
       point-cloud-preview:
         condition: service_started
+      ifc-clash:
+        condition: service_started   # kolizje = funkcja poboczna, nie blokuje startu app
     healthcheck:
       # Force IPv4 — `localhost` resolves to ::1 (IPv6) in some Docker netconfigs,
       # and Next.js bound to 0.0.0.0 isn't always reachable on the IPv6 loopback.
@@ -258,6 +264,73 @@ services:
       retries: 5
       # Stack conda/PDAL startuje wolno — jak office-converter.
       start_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+  # ───────────────────────────────────────────────────────────
+  # Kolizje IFC (moduł „Kolizje”, K1) + kalibracja danych OUT-53 (tryb BBOX,
+  # API pluginu 19.11) — IfcOpenShell 0.8.5 geom.tree. Wewnętrzny, bez portu,
+  # bez egressu (bajty modeli wypycha app po barvea_internal). Jedno ciężkie
+  # zadanie naraz (flock trzymany przez proces zadania → zwalnia też OOM-kill),
+  # zadanie w procesie potomnym, stan zadań w plikach na scratch (bind na dysku
+  # 1 TB, NIE tmpfs — tmpfs liczy się do mem_limit). Handoffy APP 2026-11-19:
+  # app/docs/INFRA_HANDOFF_IFC_CLASH_2026-11-19.md + serwer INFRA_HANDOFF_API_PLUGINU.
+  # Pomiar APP: ~8 MB RAM na 1 MB IFC + ~0,6 KB na trójkąt (51 MB IFC → 801 MB RSS).
+  # Runbook: KOLIZJE-IFC-CLASH-2026-11.md
+  # ───────────────────────────────────────────────────────────
+  ifc-clash:
+    build:
+      context: ./app/docker/ifc-clash
+      dockerfile: Dockerfile
+    image: barvea-ifc-clash:latest
+    container_name: barvea-ifc-clash
+    restart: unless-stopped
+    init: true                 # reaper: proces zadania może przeżyć restart workera gunicorna
+    user: "57439:57439"
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 512
+    tmpfs:
+      - /tmp:size=64m,mode=1777                # tylko heartbeat gunicorna (--worker-tmp-dir)
+    # 8g + 600 MB sumy IFC na zadanie: VM 102 ma 24 G, a sufity dwg 3g + office 3g
+    # + pcp 12g + collab 1g = 19g (sufit ≠ rezerwacja, ale szczyty pcp+clash naraz
+    # nie mogą przekroczyć RAM VM). Po VM 102 → 32 G: mem_limit 12g i oba
+    # IFC_CLASH_MAX_*_BYTES 1073741824 (1 GiB), jak proponował APP. Większy zestaw
+    # kontener odrzuca komunikatem, nie OOM-em. peakRssMb w ClashRun.counts.engine.
+    mem_limit: 8g
+    cpus: "4"
+    environment:
+      HOME: "/tmp"
+      SCRATCH_DIR: "/scratch"
+      IFC_CLASH_THREADS: "3"                   # wątki tesselacji (cpus 4 − 1 na HTTP)
+      IFC_CLASH_MAX_TOTAL_BYTES: "629145600"   # 600 MB sumy IFC w zadaniu (przy 8g)
+      IFC_CLASH_MAX_MODEL_BYTES: "629145600"
+      IFC_CLASH_JOB_TIMEOUT_S: "14400"         # 4 h twardego limitu na zadanie
+      # BBOX (kalibracja OUT-53): domyślne 200 elementów / 50 000 przegród wystarczają.
+      # IFC_CLASH_MAX_BBOX_GUIDS: "200"
+      # IFC_CLASH_MAX_OPENING_HOSTS: "50000"
+      # Jak pcp: app dostaje token przez env_file, sidecar TYLKO tę zmienną przez
+      # interpolację (nie widzi reszty sekretów). Pusty = sidecar odrzuca wszystko (503).
+      IFC_CLASH_TOKEN: "${IFC_CLASH_TOKEN:-}"
+    volumes:
+      # Scratch na dysku śluzy (1 TB): kopie wysłanych IFC + wynik NDJSON; app kasuje
+      # zadanie po wczytaniu wyniku, osierocone znikają po IFC_CLASH_JOB_TTL_S (24 h).
+      # PRZED startem (deploy.sh sprawdza, bootstrap.sh tworzy; bind nie dziedziczy uid):
+      #   sudo mkdir -p /srv/upload-tmp/clash-scratch && sudo chown 57439:57439 /srv/upload-tmp/clash-scratch
+      - /srv/upload-tmp/clash-scratch:/scratch
+    networks:
+      - barvea_internal        # tylko app → sidecar; zero egressu
+    healthcheck:
+      # pełna ścieżka (lekcja pcp); /health nie dotyka IfcOpenShell — odpowiada też w trakcie zadania
+      test: ["CMD", "/usr/bin/curl", "-fsS", "http://127.0.0.1:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
     logging:
       driver: json-file
       options:

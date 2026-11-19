@@ -410,6 +410,9 @@ svc_app() {    # VM 102 — docker + szkielet; DEPLOY APLIKACJI = bundle/deploy.
       # właściciela z obrazu (robi to tylko pusty named volume) — bez chown
       # każdy init uploadu pada na EACCES.
       chown 1001:1001 /srv/upload-tmp
+      # scratch sidecarów na dysku śluzy (uid 57439 = wspólny uid sidecarów):
+      # pcp (chmury punktów) i ifc-clash (kolizje). Bind-mount nie dziedziczy uid z obrazu.
+      install -d -o 57439 -g 57439 /srv/upload-tmp/pcp-scratch /srv/upload-tmp/clash-scratch
     else echo '⚠️  brak /dev/sdb — śluza uploadu NIE utworzona (dysk scsi1?)'; fi"
   vm_ssh "$ip" "mkdir -p /home/$CI_USER/barvea && chown $CI_USER: /home/$CI_USER/barvea"
   # Sprzatanie docker build cache (rosnie ~37 GB na deploy; bez timera root 75 G
