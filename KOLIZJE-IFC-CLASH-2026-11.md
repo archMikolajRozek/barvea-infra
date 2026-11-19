@@ -43,8 +43,8 @@ RAM: **decyzja Miko 2026-11-19 noc: VM 102 → 32 G** (host 128 G; goście 4+24+
 (sufit ≠ rezerwacja; appka nie wyklucza pcp i clash wzajemnie). **Decyzja Miko: `ifc-extractor` wdrażamy razem.**
 
 ## 3. Deploy (VM 102 `barvea-app`, po merge `feat/iso19650` → main w APP)
-0. Host: `qm set 102 --memory 32768 --balloon 32768` + restart VM 102 (okno ~2 min; collab flushuje przez stop_grace 30 s).
-1. Jednorazowo: `sudo install -d -o 57439 -g 57439 /srv/upload-tmp/clash-scratch /srv/upload-tmp/ifc-extractor-scratch`
+0. ✅ 19.11 noc — host: `qm set 102 --memory 32768 --balloon 32768` + `qm shutdown`/`qm start` (free: 31 G; collab flush przez stop_grace 30 s).
+1. ✅ 19.11 noc — `sudo install -d -o 57439 -g 57439 /srv/upload-tmp/clash-scratch /srv/upload-tmp/ifc-extractor-scratch`
 2. `IFC_CLASH_TOKEN=$(openssl rand -hex 32)` i `IFC_EXTRACTOR_TOKEN=$(openssl rand -hex 32)` dopisać do
    `~/barvea/.env.production` (chmod 600; bez chatu/repo).
 3. `cd ~/barvea && git pull` (compose, Caddyfile, deploy.sh) → `docker compose --env-file .env.production
