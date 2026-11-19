@@ -59,3 +59,17 @@ więc nazwa udziału nie siedzi w plikach — zmiana bezpieczna, bez przerwy w p
    `systemctl start barvea-acl-sync.service` → powstaje `<nowy>.etag/.manifest.json`, log `DONE clean`.
 Dane (`/srv/orgs/<ORG_ID>`, datasety ZFS, ACL) bez zmian. Per-org veto nie istnieje (veto globalne, §2).
 
+## 4. Usunięcie organizacji z infry (wykonane 2026-11-20: `test-drive` = cmr26ssq20000pf06fre1vy0m)
+Warunek: org usunięta w APP (urządzenia rozparowane → peery WG skasowane przez wg-provisiond), `smbstatus -S | grep -c <slug>` = 0.
+Kolejność (host `pct exec 201` + host):
+1. Samba: `rm /etc/samba/per-org/<slug>.conf`, usunąć include z `smb.conf`, `testparm -s`, `smbcontrol all reload-config`.
+2. acl-sync: `ORG_SLUGS` bez sluga (`sed -E 's/^(ORG_SLUGS=).*/\1<reszta>/'`), `rm /var/lib/barvea-acl/<slug>.{etag,manifest.json}`, restart timera.
+3. Użytkownicy SMB: `id -nG u_…` dla każdego — tylko wyłącznie-w-tej-org kasować (`pdbedit -x -u`, `userdel`); wspólnych
+   wypisać z grupy (`usermod -g <inna org>` gdy to primary, `gpasswd -d`); potem `groupdel org-<orgId>`.
+4. Dane (NIEODWRACALNE; restic hosta 04:15 ma kopię): `pct shutdown 201` → `pct set 201 -delete mpN` → `pct start 201`
+   → `zfs destroy -r hddpool/orgs/<orgId>` → `rm /etc/zfs/keys/<orgId>.ct` → `rmdir /srv/orgs/<orgId>` w LXC (pusty katalog).
+   Przerwa Samba/datad ~20 s. Inne datasety nietknięte (pełna nazwa).
+5. VM 100: `wg show wg-users` — peery org powinny już nie istnieć (APP); sieroty → `DELETE /wg/peer/<pubkey>`.
+Gotcha: NIE wypisywać `/etc/barvea/acl-sync.env` (token) — 2026-11-20 wyciek na zrzut → rotacja: nowy token do
+`.env.production` (app, recreate) → scp na host → `pct push 201` → sed w acl-sync.env → `systemctl start barvea-acl-sync` (304/DONE clean = OK).
+
