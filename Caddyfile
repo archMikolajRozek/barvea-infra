@@ -112,8 +112,9 @@ app.barvea.com {
         reverse_proxy 10.10.0.40:8723 {
             flush_interval -1
             transport http {
-                read_timeout 900s
-                write_timeout 900s
+                # 1800s (bylo 900): 300 MB na laczu komorkowym = kilkanascie minut (Mobile 2026-11-19)
+                read_timeout 1800s
+                write_timeout 1800s
                 dial_timeout 10s
             }
         }
@@ -122,7 +123,10 @@ app.barvea.com {
     # ─── Mobile: duże pobierania strumieniowe (modele 3D do 2 GB, dokumenty
     # offline) — catch-all ma write_timeout 120s, wolne łącze komórkowe dostałoby
     # ucięcie w połowie. Range/If-Range obsługuje appka. (odp. Mobile 2026-11-19)
-    @mobileStream path /api/v1/mobile/projects/*/models/*/fragments /api/v1/mobile/*/download /api/v1/mobile/*/download/*
+    # Ścieżki od Mobile 2026-11-19 (download dokumentu = 302 na /dl/, ale fallback
+    # MinIO strumieniuje przez /api/; preview DWG; zdjęcia do 20 MB na słabym zasięgu;
+    # POST-y zdjęć multipart 2–4 min przy 1–2 Mb/s).
+    @mobileStream path /api/v1/mobile/projects/*/models/*/fragments         /api/v1/orgs/*/projects/*/documents/*/download /api/v1/orgs/*/projects/*/documents/*/preview         /api/v1/orgs/*/projects/*/bim-issues/*/attachments /api/v1/orgs/*/projects/*/bim-issues/*/attachments/*         /api/v1/orgs/*/projects/*/daily-log/*/photos /api/v1/orgs/*/projects/*/daily-log/*/photos/*         /api/v1/orgs/*/projects/*/deliveries/*/photos /api/v1/orgs/*/projects/*/deliveries/*/photos/*         /api/v1/orgs/*/projects/*/work-orders/*/photos /api/v1/orgs/*/projects/*/work-orders/*/photos/*
     handle @mobileStream {
         reverse_proxy app:3005 {
             flush_interval -1
