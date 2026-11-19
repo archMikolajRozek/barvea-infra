@@ -44,3 +44,18 @@ pct push 201 /tmp/barvea-acl-sync.py /usr/local/sbin/barvea-acl-sync.py && pct e
 pct exec 201 -- bash -c "testparm -s 2>&1 | grep -E 'delete veto'"   # = No
 pct exec 201 -- smbcontrol all reload-config
 ```
+
+## 3. Zmiana nazwy udziału organizacji (wykonane 2026-11-19: `archbimcloud` → `barvea`)
+Udział Samby = `COALESCE(Organization.driveShareName, slug)` (APP). Pliki w Revicie są otwierane przez literę dysku,
+więc nazwa udziału nie siedzi w plikach — zmiana bezpieczna, bez przerwy w pracy. Trzy kroki, zawsze w tej kolejności:
+1. **Infra:** nowy udział obok starego — kopia `/etc/samba/per-org/<stary>.conf` jako `<nowy>.conf` z `[<nowy>]`
+   i TĄ SAMĄ ścieżką `/srv/orgs/<ORG_ID>`, include w `smb.conf`, `testparm -s`, `smbcontrol all reload-config`.
+   Gotcha: nagłówek sekcji w per-org conf jest WCIĘTY (`  [slug]`) — sed na `^[[:space:]]*\[`.
+2. **Admin org w panelu:** Organizacje → „Udział BARVEA Drive — Ustaw jak adres” (2FA). Od tej chwili API wydaje
+   `mountTarget=\\drive.barvea.internal\<nowy>`; klienci przemontowują przy najbliższym `/devices/me`.
+3. **Infra, sprzątanie** gdy `pct exec 201 -- bash -c "smbstatus -S | grep -c <stary>"` = 0:
+   usunąć `<stary>.conf` + include, `ORG_SLUGS` w `/etc/barvea/acl-sync.env` (`sed -i -E 's/^(ORG_SLUGS=.*)<stary>/\1<nowy>/'`),
+   skasować `/var/lib/barvea-acl/<stary>.{etag,manifest.json}`, `smbcontrol all reload-config`,
+   `systemctl start barvea-acl-sync.service` → powstaje `<nowy>.etag/.manifest.json`, log `DONE clean`.
+Dane (`/srv/orgs/<ORG_ID>`, datasety ZFS, ACL) bez zmian. Per-org veto nie istnieje (veto globalne, §2).
+
