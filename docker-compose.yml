@@ -37,6 +37,9 @@ services:
       # IFC_CLASH_URL moduł Kolizje jest ciemny (409 „silnik nie jest uruchomiony”).
       # IFC_CLASH_TOKEN z .env.production (env_file). Rollback = usunąć tę linię + recreate app.
       IFC_CLASH_URL: "http://ifc-clash:8080"
+      # Zestawienia IFC (ifcopenshell): sidecar ifc-extractor. Bez IFC_EXTRACTOR_URL moduł
+      # wyłączony (app gasi go jak Drive bez DRIVE_DATA_URL). IFC_EXTRACTOR_TOKEN z .env.production.
+      IFC_EXTRACTOR_URL: "http://ifc-extractor:8080"
       # Współedycja: port kontroli collab (flush/unlock/broadcast) — nigdy przez Caddy.
       # Reszta COLLAB_* (PUBLIC_URL, SERVICE_TOKEN, JWT_*) z .env.production przez env_file.
       COLLAB_INTERNAL_URL: "http://collab:1235"
@@ -70,6 +73,8 @@ services:
         condition: service_started
       ifc-clash:
         condition: service_started   # kolizje = funkcja poboczna, nie blokuje startu app
+      ifc-extractor:
+        condition: service_started   # zestawienia IFC = funkcja poboczna
     healthcheck:
       # Force IPv4 — `localhost` resolves to ::1 (IPv6) in some Docker netconfigs,
       # and Next.js bound to 0.0.0.0 isn't always reachable on the IPv6 loopback.
@@ -296,19 +301,20 @@ services:
     pids_limit: 512
     tmpfs:
       - /tmp:size=64m,mode=1777                # tylko heartbeat gunicorna (--worker-tmp-dir)
-    # 8g + 600 MB sumy IFC na zadanie: VM 102 ma 24 G, a sufity dwg 3g + office 3g
-    # + pcp 12g + collab 1g = 19g (sufit ≠ rezerwacja, ale szczyty pcp+clash naraz
-    # nie mogą przekroczyć RAM VM). Po VM 102 → 32 G: mem_limit 12g i oba
-    # IFC_CLASH_MAX_*_BYTES 1073741824 (1 GiB), jak proponował APP. Większy zestaw
-    # kontener odrzuca komunikatem, nie OOM-em. peakRssMb w ClashRun.counts.engine.
-    mem_limit: 8g
+    # 12g + 1 GiB sumy IFC na zadanie (propozycja APP; decyzja Miko 2026-11-19:
+    # VM 102 → 32 G). Sufity sidecarów: dwg 3g + office 3g + pcp 12g + collab 1g
+    # + clash 12g + extractor 4g = 35g > 32 G — sufit ≠ rezerwacja, ale szczyt pcp
+    # i clash naraz może nie wejść; appka nie wyklucza ich wzajemnie (na razie jedno
+    # zadanie kolizji naraz). Większy zestaw kontener odrzuca komunikatem, nie OOM-em.
+    # peakRssMb w ClashRun.counts.engine → korekta po pierwszych testach.
+    mem_limit: 12g
     cpus: "4"
     environment:
       HOME: "/tmp"
       SCRATCH_DIR: "/scratch"
       IFC_CLASH_THREADS: "3"                   # wątki tesselacji (cpus 4 − 1 na HTTP)
-      IFC_CLASH_MAX_TOTAL_BYTES: "629145600"   # 600 MB sumy IFC w zadaniu (przy 8g)
-      IFC_CLASH_MAX_MODEL_BYTES: "629145600"
+      IFC_CLASH_MAX_TOTAL_BYTES: "1073741824"  # 1 GiB sumy IFC w zadaniu (~8 GB RAM samo otwarcie)
+      IFC_CLASH_MAX_MODEL_BYTES: "1073741824"
       IFC_CLASH_JOB_TIMEOUT_S: "14400"         # 4 h twardego limitu na zadanie
       # BBOX (kalibracja OUT-53): domyślne 200 elementów / 50 000 przegród wystarczają.
       # IFC_CLASH_MAX_BBOX_GUIDS: "200"
@@ -330,6 +336,55 @@ services:
       interval: 30s
       timeout: 10s
       retries: 5
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+  # ───────────────────────────────────────────────────────────
+  # Zestawienia IFC (ifcopenshell 0.8.5, ten sam obraz bazowy co ifc-clash, ale
+  # OSOBNA, lekka usługa: bezstanowa, per-request izolacja w /tmp/ifc/<uuid>,
+  # sprzątane w finally). App rozmawia przez IFC_EXTRACTOR_URL + Bearer
+  # IFC_EXTRACTOR_TOKEN (bez tokenu sidecar odrzuca wszystko). Plik IFC
+  # przychodzi w żądaniu (≤ IFC_MAX_BYTES) i ląduje na scratch NA DYSKU
+  # (bind na /tmp/ifc pod tmpfs /tmp — tmpfs liczyłby się do mem_limit).
+  # ~8 MB RAM na 1 MB IFC → 400 MB IFC ≈ 3,2 GB; stąd 4g + IFC_MAX_BYTES 400 MB.
+  # Decyzja Miko 2026-11-19: wdrażamy razem z ifc-clash. Runbook: KOLIZJE-IFC-CLASH-2026-11.md
+  # ───────────────────────────────────────────────────────────
+  ifc-extractor:
+    build:
+      context: ./app/docker/ifc-extractor
+      dockerfile: Dockerfile
+    image: barvea-ifc-extractor:latest
+    container_name: barvea-ifc-extractor
+    restart: unless-stopped
+    user: "57439:57439"
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 256
+    tmpfs:
+      - /tmp:size=64m,mode=1777                # gunicorn heartbeat; pliki IFC idą na bind /tmp/ifc
+    mem_limit: 4g
+    cpus: "2"
+    environment:
+      HOME: "/tmp"
+      IFC_MAX_BYTES: "419430400"               # 400 MB na plik (≈ 3,2 GB RAM przy parsowaniu)
+      # app dostaje token przez env_file, sidecar TYLKO tę zmienną (pusty = odrzuca wszystko)
+      IFC_EXTRACTOR_TOKEN: "${IFC_EXTRACTOR_TOKEN:-}"
+    volumes:
+      # Scratch na dysku śluzy (1 TB). PRZED startem (deploy.sh sprawdza, bootstrap.sh tworzy):
+      #   sudo install -d -o 57439 -g 57439 /srv/upload-tmp/ifc-extractor-scratch
+      - /srv/upload-tmp/ifc-extractor-scratch:/tmp/ifc
+    networks:
+      - barvea_internal        # tylko app → sidecar; zero egressu
+    healthcheck:
+      test: ["CMD", "/usr/bin/curl", "-fsS", "http://127.0.0.1:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
       start_period: 30s
     logging:
       driver: json-file

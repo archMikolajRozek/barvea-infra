@@ -8,7 +8,7 @@ okazji handoffu API pluginu) i `serwer/archiwum/INFRA_HANDOFF_API_PLUGINU_2026-1
 ## 1. Co doszło w repo infra
 | Plik | Zmiana |
 |---|---|
-| `docker-compose.yml` | usługa `ifc-clash` (hardening jak pcp: uid 57439, read_only, cap_drop ALL, no-new-privileges, pids 512, tmpfs /tmp 64m, `init: true`, `mem_limit 8g`, `cpus 4`, scratch bind `/srv/upload-tmp/clash-scratch`, tylko `barvea_internal`); `app`: `IFC_CLASH_URL=http://ifc-clash:8080` + `depends_on ifc-clash: service_started` |
+| `docker-compose.yml` | usługa `ifc-clash` (hardening jak pcp: uid 57439, read_only, cap_drop ALL, no-new-privileges, pids 512, tmpfs /tmp 64m, `init: true`, `mem_limit 12g`, `cpus 4`, limity 1 GiB, scratch bind `/srv/upload-tmp/clash-scratch`, tylko `barvea_internal`); usługa `ifc-extractor` (zestawienia IFC, ten sam hardening, `mem_limit 4g`, `cpus 2`, `IFC_MAX_BYTES` 400 MB, scratch bind `/srv/upload-tmp/ifc-extractor-scratch` → `/tmp/ifc`); `app`: `IFC_CLASH_URL`, `IFC_EXTRACTOR_URL` + `depends_on … service_started` |
 | `scripts/deploy.sh` | `ifc-clash` w obu pętlach sidecarów (build nie-fatalny, `up -d --no-deps`); kontrola scratch (`case` pcp / clash: katalog musi istnieć i nie być root-owned) |
 | `Caddyfile` | `@pluginAnalytics` (init ≤ 8 MiB, parts ≤ 16 MiB → `max_size 17MB`, 600 s); `…/ifc/{modelId}/file` w `@mobileStream` (1800 s, flush -1, Range); `/api/v1/plugin/projects/*/ifc-upload` w `@uploads` (dotąd leciał catch-allem ze 120 s) |
 | `.env.example` | `IFC_CLASH_TOKEN` (🔑), opcjonalne `CLASH_*`, notka: `MINIO_PUBLIC_ENDPOINT` celowo brak |
@@ -38,12 +38,15 @@ Kopie: restic VM 101 03:09 = `pg_dump` całej bazy + `/mnt/minio-data` → nowe 
 objęte; części OUT-53 / raporty (retencja 7 dni) przejściowe. Przyrost: każdy eksport IFC z pluginu z `link:true`
 = kopia w MinIO obok pliku na ZFS (×2 na dysku, ×2 w restic).
 
-RAM: ifc-clash 8g / 600 MB sumy IFC (zmierzone: 51 MB IFC → 801 MB RSS; ~8 MB RAM na 1 MB IFC). Docelowo
-VM 102 → 32 G (host 128 G; goście dziś 4+24+24+2+8 G) → `mem_limit 12g`, limity 1 GiB. Decyzja Miko.
+RAM: **decyzja Miko 2026-11-19 noc: VM 102 → 32 G** (host 128 G; goście 4+24+32+2+8 G) → ifc-clash `12g` / 1 GiB
+(zmierzone: 51 MB IFC → 801 MB RSS; ~8 MB RAM na 1 MB IFC), ifc-extractor `4g` / 400 MB. Suma sufitów 35 g > 32 G
+(sufit ≠ rezerwacja; appka nie wyklucza pcp i clash wzajemnie). **Decyzja Miko: `ifc-extractor` wdrażamy razem.**
 
 ## 3. Deploy (VM 102 `barvea-app`, po merge `feat/iso19650` → main w APP)
-1. Jednorazowo: `sudo install -d -o 57439 -g 57439 /srv/upload-tmp/clash-scratch`
-2. `IFC_CLASH_TOKEN=$(openssl rand -hex 32)` dopisać do `~/barvea/.env.production` (chmod 600; bez chatu/repo).
+0. Host: `qm set 102 --memory 32768 --balloon 32768` + restart VM 102 (okno ~2 min; collab flushuje przez stop_grace 30 s).
+1. Jednorazowo: `sudo install -d -o 57439 -g 57439 /srv/upload-tmp/clash-scratch /srv/upload-tmp/ifc-extractor-scratch`
+2. `IFC_CLASH_TOKEN=$(openssl rand -hex 32)` i `IFC_EXTRACTOR_TOKEN=$(openssl rand -hex 32)` dopisać do
+   `~/barvea/.env.production` (chmod 600; bez chatu/repo).
 3. `cd ~/barvea && git pull` (compose, Caddyfile, deploy.sh) → `docker compose --env-file .env.production
    run --rm --no-deps caddy caddy validate --config /etc/caddy/Caddyfile` (potrzebuje `/etc/ssl/barvea`).
 4. `scripts/deploy.sh` — pre-deploy pg_dump, build app + sidecary (w tym `ifc-clash`), migracje
@@ -51,6 +54,7 @@ VM 102 → 32 G (host 128 G; goście dziś 4+24+24+2+8 G) → `mem_limit 12g`, l
    `20261119235500_plugin_api_review`, recreate collab → app, Caddy reload.
 5. Smoke:
    - `docker compose exec app wget -qO- http://ifc-clash:8080/health` → `{"ok":true,"ifcopenshell":"0.8.5","busy":false}`
+   - `docker compose exec app wget -qO- http://ifc-extractor:8080/health` → ok; w www zestawienia IFC przestają być „ciemne”
    - logi app: `[clash] worker started (15s interval)`, `[clash-report] worker started (60s interval, 7-day retention)`,
      `[element-analytics] worker started (60s interval)`
    - token pluginu: `GET /api/v1/plugin/me` → `features.clash.version = 2`; `PUT …/element-analytics/{id}/parts/1`
@@ -63,6 +67,5 @@ VM 102 → 32 G (host 128 G; goście dziś 4+24+24+2+8 G) → `mem_limit 12g`, l
 Rollback: usunąć `IFC_CLASH_URL` z `app.environment` + recreate app (moduł ciemny), `docker compose stop ifc-clash`.
 
 ## 4. Otwarte
-- `ifc-extractor` (zestawienia IFC, ~3g, ten sam wzorzec) nadal niewdrożony — moduł ciemny. Decyzja Miko: wdrażać razem?
-- VM 102 → 32 G (okno z restartem ~2 min) → ifc-clash 12g / 1 GiB.
+- ✅ decyzje 19.11 noc: `ifc-extractor` razem; VM 102 → 32 G; ifc-clash 12g / 1 GiB.
 - Dedyk/air-gap: koło `ifcopenshell` (LGPL-3.0, statyczne OCCT/CGAL) → przegląd licencji przed dołączeniem do paczki.

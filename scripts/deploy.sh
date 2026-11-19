@@ -111,7 +111,7 @@ img_id() { docker image inspect "$1" --format '{{.Id}}' 2>/dev/null || echo "non
 
 CONVERTER_RECREATE=()
 CONVERTER_FAILED=()
-for svc in dwg-converter office-converter point-cloud-preview ifc-clash; do
+for svc in dwg-converter office-converter point-cloud-preview ifc-clash ifc-extractor; do
   # point-cloud-preview: scratch NA DUZYM DYSKU musi istniec i nie moze byc
   # root-owned ZANIM kontener wstanie. Docker sam tworzy brakujacy katalog
   # bind-mountu jako root:755, a wtedy CPython PO CICHU pomija niezapisywalny
@@ -122,6 +122,7 @@ for svc in dwg-converter office-converter point-cloud-preview ifc-clash; do
   case "$svc" in
     point-cloud-preview) SCRATCH=/srv/upload-tmp/pcp-scratch ;;
     ifc-clash)           SCRATCH=/srv/upload-tmp/clash-scratch ;;
+    ifc-extractor)       SCRATCH=/srv/upload-tmp/ifc-extractor-scratch ;;
   esac
   if [[ -n "$SCRATCH" ]]; then
     if [[ ! -d "$SCRATCH" || "$(stat -c %u "$SCRATCH")" == "0" ]]; then
@@ -177,7 +178,7 @@ docker compose --env-file .env.production run --rm --no-deps app prisma migrate 
 # brak zmian = kontener nietknięty (bez zimnego startu). Wcześniejsze
 # porównanie ID obrazu gubiło zmiany samej konfiguracji (hardening 09.2026).
 # Pomijamy tylko te, których build padł (stary kontener jedzie dalej).
-for svc in dwg-converter office-converter point-cloud-preview ifc-clash; do
+for svc in dwg-converter office-converter point-cloud-preview ifc-clash ifc-extractor; do
   if printf '%s
 ' "${CONVERTER_FAILED[@]}" | grep -qx "$svc"; then
     echo ">>> $svc: build failed earlier — leaving running container as is"

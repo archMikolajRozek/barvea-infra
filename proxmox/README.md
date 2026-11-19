@@ -53,7 +53,9 @@ scsihw: virtio-scsi-single / net0: virtio,bridge=vmbr1 / startup: order=2
 
 ## VM 102 — barvea-app (10.10.0.30; Caddy+Next+konwertery dwg/office/point-cloud)
 ```
-q35 / cpu: host / cores: 8 / memory: 24576 balloon=24576 / agent: 1 / onboot: 1
+q35 / cpu: host / cores: 8 / memory: 32768 balloon=32768 / agent: 1 / onboot: 1
+   (2026-11-19 noc: 24G → 32G — sidecary ifc-clash 12g + ifc-extractor 4g (kolizje/zestawienia IFC);
+    suma sufitów 35g; host 128G, goście razem ~70G + ARC)
    (2026-11-19: 16G → 24G — suma mem_limit sidecarów 19G + appka; restart z kernelem 6.12.117)
    (2026-09-07: 4c/8G → 8c/16G — VM liczy PDAL-em chmury, konwertuje
     LibreOffice/DWG i buduje Nexta, czasem naraz; host 12C/24T+128G ma zapas.
