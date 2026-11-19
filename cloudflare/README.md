@@ -55,5 +55,11 @@ DNS na marginesie (NIE ruszane): `barvea.com` A → 109.95.157.167 (CMS), ale
 ### Limity i wycofanie
 - Body przez proxy CF = limit planu strefy (Free/Pro ~100 MB na żądanie) —
   dotyczy app.barvea.com identycznie; Worker nic nie pogarsza. Free: 100k req/dzień.
-- Wycofać (skasować trasy), gdy Ustawienia → Urządzenia nie pokazują już tokenów
-  bez `X-Plugin-Version`. Worker może zostać nieaktywny — koszt zero.
+- Wycofanie w dwóch krokach (ustalone z APP i pluginem 2026-11-19):
+  1. Plugin 1.0.0 (twarda bramka 426 w kliencie) wydany + `PLUGIN_MIN_VERSION=1.0.0`
+     w `.env.production` + recreate app → appka zwraca 426 starym buildom.
+  2. Kod Workera podmienić na `plugin-proxy-worker-426.js` (te same trasy): 426 JSON
+     `PLUGIN_UPDATE_REQUIRED` z `details.{minPluginVersion, currentVersion:null, updateUrl,
+     hostApp}` + `Cache-Control: no-store` (ciało = kontrakt bramki APP; plugin czyta
+     `details`). Po 2–4 tyg. bez ruchu (metryki Workera) skasować trasy i Workera.
+- AAAA `barvea.com` → nasz host usunięty z CF 2026-11-19 (Miko); apex = tylko CMS.
