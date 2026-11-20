@@ -19,7 +19,7 @@ compression=lz4   atime=off   xattr=sa   acltype=posix
 ```
 hddpool/orgs                      compression=zstd (nadpisuje lz4), mountpoint=/hddpool/orgs
 hddpool/orgs/<orgId>              per-org CDE store (przepis niżej)
-hddpool/orgs/test-org-001         testowy, BEZ szyfrowania/refquota
+hddpool/orgs/test-org-001         (USUNIĘTY 2026-11-20 — był testowy z fazy 0)
 hddpool/subvol-200-disk-0         LXC 200 vault rootfs (8G)
 hddpool/subvol-201-disk-0         LXC 201 storage rootfs (16G)
 hddpool/vm-100/101/102-disk-*     dyski VM (zvole Proxmoxa)

@@ -26,12 +26,11 @@ arch: amd64 / ostype: debian / unprivileged: 1 / features: nesting=1 / onboot: 1
 cores: 4 / memory: 8192 / swap: 512
 rootfs: hdd-pool:subvol-201-disk-0,size=16G
 net0: name=eth0,bridge=vmbr1,gw=10.10.0.1,ip=10.10.0.40/24
-mp0: /hddpool/orgs/test-org-001,mp=/srv/orgs/test-org-001
 mp2: /hddpool/orgs/cmoqugczl004fml07iemp8srs,mp=/srv/orgs/cmoqugczl004fml07iemp8srs
 mp3: /hddpool/orgs/cmoiknvvz0001o507gke6cq6z,mp=/srv/orgs/cmoiknvvz0001o507gke6cq6z
 mp4: /hddpool/orgs/cmpk152ja03z8l90706aew825,mp=/srv/orgs/cmpk152ja03z8l90706aew825
 ```
-- 2026-11-20: org `test-drive` (cmr26ssq20000pf06fre1vy0m, mp1) usunięta w całości — procedura w DRIVE-DNS-VETO-2026-11.md §4. Numeracja mp ma lukę (mp1), to normalne.
+- 2026-11-20: orgi `test-drive` (cmr26ssq20000pf06fre1vy0m, mp1) i `test-org-001` (mp0, faza 0, testuser) usunięte w całości — procedura w DRIVE-DNS-VETO-2026-11.md §4. Numeracja mp ma luki (mp0, mp1), to normalne; zostały mp2–mp4 = 3 realne orgi.
 - ⚠️ **KAŻDY nowy org = nowy `mpN`** (`pct set 201 -mp<N> …` + restart LXC)
   — część ręcznego org-provision (docelowo org-provision daemon).
 - unprivileged → uid-shift +100000 na hoście (smb-userzy uid 5100+ w LXC =

@@ -36,7 +36,7 @@ Host: publiczny IPv4 178.63.205.222 + IPv6 2a01:4f8:2240:13d5::2
 - klienty Windows (Drive): wpis hosts stawiany przez klienta/instalację
 - fresh-build: dopisać do hosts LXC 201 + dokumentacji klienta
 
-Legacy: share `test-org-001` ma stare maski 0660/2770 (model group-writable
+Legacy (share `test-org-001` usunięty 2026-11-20): miał stare maski 0660/2770 (model group-writable
 sprzed per-file WIP privacy) — celowo niezmieniane (testowy); realne orgi =
 0600/0700 jak w per-org.conf.template.
 
