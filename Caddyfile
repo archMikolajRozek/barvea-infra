@@ -435,8 +435,12 @@ admin.barvea.com {
         }
     }
     handle {
-        @get method GET
-        redir @get https://app.barvea.com{uri} 302
+        # Strony (GET poza /api) → appka; API spoza listy → 404 (bez przekierowań dla klientów API).
+        @pageGet {
+            method GET
+            not path /api/*
+        }
+        redir @pageGet https://app.barvea.com{uri} 302
         respond 404
     }
 
