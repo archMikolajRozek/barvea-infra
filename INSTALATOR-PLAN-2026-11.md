@@ -63,6 +63,12 @@ i dalsze zmiany appki = nowy bundle + `deploy-app`, bez dotykania instalatora.
 - Drive: lista endpointów klienta dla dedyka (hosty `*.<domena>` zamiast `barvea.internal`) — czy klient obsługuje inną domenę wewnętrzną (dziś pin SPKI + nazwy w appsettings).
 - Plugin: „własny serwer” w kliencie = `https://app.<domena>` z CA organizacji (import CA do Windows przy instalacji Drive?).
 
+### Ustalenia z APP 23.11 (zakres potwierdzony przez Miko: „dodajemy wszystko”)
+- Kolejność APP: env.template → compose → bootstrap-instance → bundle+MANIFEST → sprawdzenia CSP/AV/air-gap.
+- Profile compose: zawsze app, caddy, dwg-converter, office-converter; `pointcloud` (pcp 12 g), `collab` (1 g), `ifc` (ifc-clash + ifc-extractor 16 g), `compact` (postgres:18 + redis w compose), `av` (full: nic — clamd natywnie LXC 201; compact: kontener clamav), `drive` = tylko env (full). Kreator → `COMPOSE_PROFILES` w .env.production.
+- `--force-2fa` = TOTP admina przy pierwszym logowaniu + org z „2FA wymagane dla wszystkich”. Hasło admina generuje instalator (env BOOTSTRAP_ADMIN_PASSWORD, nie argv).
+- MANIFEST.json {bundleVersion, buildDate, appCommit, deploymentMode, images[{service,image,tag,imageId,tarSha256}], files[{path,sha256}], minInstallerVersion, profiles} + detached MANIFEST.sig Ed25519 kluczem Vault `update-manifest-ed25519` (nie license-ed25519); deploy-app sprawdza podpis, sha images.tar, `buildDate <= updatesUntil`.
+
 ## 3. Decyzje Miko — PODJĘTE 2026-11-23 wieczorem
 1. Domena wewnętrzna dedyka: **stała `barvea.internal`** (tak nazywa się system; klienci Drive/plugin = jedna konfiguracja).
 2. Vault: **automatyczny `operator init` w bootstrapie, klucze + root token do pliku 0600** (`/root/barvea-vault-keys.json`), operator zabiera plik poza serwer i potwierdza; tryb „podział Shamira” nadal opcją w kreatorze.
