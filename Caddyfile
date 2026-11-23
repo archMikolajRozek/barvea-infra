@@ -133,6 +133,10 @@ app.barvea.com {
         reverse_proxy app:3005 {
             flush_interval -1
             header_up X-Real-IP {client_ip}
+            # Nagłówki tożsamości mTLS tylko z TLS (catch-all/internal); tu zdejmij, co przysłał klient.
+            header_up -X-Client-Cert-Subject
+            header_up -X-Client-Cert-Issuer
+            header_up -X-Client-Cert-Serial
             transport http {
                 read_timeout 1800s
                 write_timeout 1800s
@@ -155,6 +159,10 @@ app.barvea.com {
         }
         reverse_proxy app:3005 {
             header_up X-Real-IP {client_ip}
+            # Nagłówki tożsamości mTLS tylko z TLS (catch-all/internal); tu zdejmij, co przysłał klient.
+            header_up -X-Client-Cert-Subject
+            header_up -X-Client-Cert-Issuer
+            header_up -X-Client-Cert-Serial
             header_up X-Forwarded-For {remote_host}
             header_up X-Forwarded-Proto {scheme}
             transport http {
@@ -173,6 +181,10 @@ app.barvea.com {
                 write_timeout 60s
             }
             header_up X-Real-IP {client_ip}
+            # Nagłówki tożsamości mTLS tylko z TLS (catch-all/internal); tu zdejmij, co przysłał klient.
+            header_up -X-Client-Cert-Subject
+            header_up -X-Client-Cert-Issuer
+            header_up -X-Client-Cert-Serial
             header_up X-Forwarded-For {remote_host}
             header_up X-Forwarded-Proto {scheme}
         }
@@ -195,6 +207,10 @@ app.barvea.com {
                 dial_timeout 30s
             }
             header_up X-Real-IP {client_ip}
+            # Nagłówki tożsamości mTLS tylko z TLS (catch-all/internal); tu zdejmij, co przysłał klient.
+            header_up -X-Client-Cert-Subject
+            header_up -X-Client-Cert-Issuer
+            header_up -X-Client-Cert-Serial
             header_up X-Forwarded-For {remote_host}
             header_up X-Forwarded-Proto {scheme}
         }
@@ -229,6 +245,10 @@ app.barvea.com {
                 dial_timeout 30s
             }
             header_up X-Real-IP {client_ip}
+            # Nagłówki tożsamości mTLS tylko z TLS (catch-all/internal); tu zdejmij, co przysłał klient.
+            header_up -X-Client-Cert-Subject
+            header_up -X-Client-Cert-Issuer
+            header_up -X-Client-Cert-Serial
             header_up X-Forwarded-For {remote_host}
             header_up X-Forwarded-Proto {scheme}
         }
@@ -239,6 +259,10 @@ app.barvea.com {
         reverse_proxy app:3005 {
             # spójność: X-Real-IP = {client_ip} na KAŻDEJ trasie do app (mobile 10.2026)
             header_up X-Real-IP {client_ip}
+            # Nagłówki tożsamości mTLS tylko z TLS (catch-all/internal); tu zdejmij, co przysłał klient.
+            header_up -X-Client-Cert-Subject
+            header_up -X-Client-Cert-Issuer
+            header_up -X-Client-Cert-Serial
             transport http {
                 read_timeout 10s
             }
@@ -366,7 +390,8 @@ admin.barvea.com {
     }
 
     # Trasy wewnętrzne i Drive nigdy pod hostem panelu (defense-in-depth; appka i tak 404-uje).
-    @notForAdmin path /api/v1/internal /api/v1/internal/* /api/v1/drive/* /api/v1/orgs/*/drive/* /_collab /_collab/* /dl/*
+    @notForAdmin path /api/v1/internal /api/v1/internal/* /api/v1/drive/* /api/v1/orgs/*/drive/* /_collab /_collab/* /dl/* \
+        /api/v1/devices /api/v1/devices/* /api/v1/sessions /api/v1/sessions/* /api/v1/plugin /api/v1/plugin/* /api/v1/mobile /api/v1/mobile/*
     respond @notForAdmin 404
 
     # Największe ciało pod panelem = kawałek wydania instalatora (8 MB, serwer do 16 MB)
@@ -377,6 +402,10 @@ admin.barvea.com {
 
     reverse_proxy app:3005 {
         header_up X-Real-IP {client_ip}
+        # Nagłówki tożsamości mTLS tylko z TLS (catch-all/internal); tu zdejmij, co przysłał klient.
+        header_up -X-Client-Cert-Subject
+        header_up -X-Client-Cert-Issuer
+        header_up -X-Client-Cert-Serial
         header_up X-Forwarded-For {remote_host}
         header_up X-Forwarded-Proto {scheme}
         header_up Host {host}
