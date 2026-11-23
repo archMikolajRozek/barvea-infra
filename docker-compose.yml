@@ -465,6 +465,10 @@ services:
   # ───────────────────────────────────────────────────────────
   caddy:
     image: caddy:2-alpine
+    environment:
+      # Dowód mTLS dla appki (Caddyfile: header_up X-Barvea-Mtls-Proof {env.MTLS_PROXY_SECRET}).
+      # Tylko ta jedna zmienna z .env.production (interpolacja), bez env_file — caddy nie widzi reszty sekretów.
+      MTLS_PROXY_SECRET: "${MTLS_PROXY_SECRET:-}"
     container_name: barvea-caddy
     restart: unless-stopped
     ports:

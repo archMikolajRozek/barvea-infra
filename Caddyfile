@@ -137,6 +137,7 @@ app.barvea.com {
             header_up -X-Client-Cert-Subject
             header_up -X-Client-Cert-Issuer
             header_up -X-Client-Cert-Serial
+            header_up -X-Barvea-Mtls-Proof
             transport http {
                 read_timeout 1800s
                 write_timeout 1800s
@@ -163,6 +164,7 @@ app.barvea.com {
             header_up -X-Client-Cert-Subject
             header_up -X-Client-Cert-Issuer
             header_up -X-Client-Cert-Serial
+            header_up -X-Barvea-Mtls-Proof
             header_up X-Forwarded-For {remote_host}
             header_up X-Forwarded-Proto {scheme}
             transport http {
@@ -185,6 +187,7 @@ app.barvea.com {
             header_up -X-Client-Cert-Subject
             header_up -X-Client-Cert-Issuer
             header_up -X-Client-Cert-Serial
+            header_up -X-Barvea-Mtls-Proof
             header_up X-Forwarded-For {remote_host}
             header_up X-Forwarded-Proto {scheme}
         }
@@ -211,6 +214,7 @@ app.barvea.com {
             header_up -X-Client-Cert-Subject
             header_up -X-Client-Cert-Issuer
             header_up -X-Client-Cert-Serial
+            header_up -X-Barvea-Mtls-Proof
             header_up X-Forwarded-For {remote_host}
             header_up X-Forwarded-Proto {scheme}
         }
@@ -249,6 +253,7 @@ app.barvea.com {
             header_up -X-Client-Cert-Subject
             header_up -X-Client-Cert-Issuer
             header_up -X-Client-Cert-Serial
+            header_up -X-Barvea-Mtls-Proof
             header_up X-Forwarded-For {remote_host}
             header_up X-Forwarded-Proto {scheme}
         }
@@ -263,6 +268,7 @@ app.barvea.com {
             header_up -X-Client-Cert-Subject
             header_up -X-Client-Cert-Issuer
             header_up -X-Client-Cert-Serial
+            header_up -X-Barvea-Mtls-Proof
             transport http {
                 read_timeout 10s
             }
@@ -288,6 +294,9 @@ app.barvea.com {
             header_up X-Client-Cert-Subject {tls_client_subject}
             header_up X-Client-Cert-Issuer {tls_client_issuer}
             header_up X-Client-Cert-Serial {tls_client_serial}
+            # Dowód, że X-Client-Cert-* ustawił Caddy z TLS (APP lib/mtls.ts, MTLS_PROXY_SECRET w .env.production,
+            # do kontenera caddy przez compose environment). Pusty = appka bez sekretu działa jak dotąd.
+            header_up X-Barvea-Mtls-Proof {env.MTLS_PROXY_SECRET}
 
             # Sensible timeouts for non-upload traffic
             transport http {
@@ -348,6 +357,9 @@ https://app.barvea.internal {
         header_up X-Client-Cert-Subject {tls_client_subject}
         header_up X-Client-Cert-Issuer {tls_client_issuer}
         header_up X-Client-Cert-Serial {tls_client_serial}
+        # Dowód, że X-Client-Cert-* ustawił Caddy z TLS (APP lib/mtls.ts, MTLS_PROXY_SECRET w .env.production,
+        # do kontenera caddy przez compose environment). Pusty = appka bez sekretu działa jak dotąd.
+        header_up X-Barvea-Mtls-Proof {env.MTLS_PROXY_SECRET}
         transport http {
             read_timeout 120s
             write_timeout 120s
@@ -389,31 +401,43 @@ admin.barvea.com {
         -X-Powered-By
     }
 
-    # Trasy wewnętrzne i Drive nigdy pod hostem panelu (defense-in-depth; appka i tak 404-uje).
-    @notForAdmin path /api/v1/internal /api/v1/internal/* /api/v1/drive/* /api/v1/orgs/*/drive/* /_collab /_collab/* /dl/* \
-        /api/v1/devices /api/v1/devices/* /api/v1/sessions /api/v1/sessions/* /api/v1/plugin /api/v1/plugin/* /api/v1/mobile /api/v1/mobile/*
-    respond @notForAdmin 404
-
-    # Największe ciało pod panelem = kawałek wydania instalatora (8 MB, serwer do 16 MB)
-    # i medium CMS 10 MB (APP 2026-11-23). Reszta = małe JSON-y.
-    request_body {
-        max_size 20MB
-    }
-
-    reverse_proxy app:3005 {
-        header_up X-Real-IP {client_ip}
-        # Nagłówki tożsamości mTLS tylko z TLS (catch-all/internal); tu zdejmij, co przysłał klient.
-        header_up -X-Client-Cert-Subject
-        header_up -X-Client-Cert-Issuer
-        header_up -X-Client-Cert-Serial
-        header_up X-Forwarded-For {remote_host}
-        header_up X-Forwarded-Proto {scheme}
-        header_up Host {host}
-        transport http {
-            read_timeout 120s
-            write_timeout 120s
-            dial_timeout 10s
+    # ALLOWLISTA ścieżek panelu (lista od APP 2026-11-23, zgodna z bramką w aplikacji).
+    # Trailing `*` = prefiks (dowolna głębokość). Spoza listy: GET → redirect na appkę
+    # (odnośniki z panelu do /docs, /pobierz, /roadmap), reszta 404.
+    @adminAllowed path / /admin /admin/* /api/v1/admin/* \
+        /login /login/* /2fa /2fa/* /blocked /blocked/* \
+        /api/auth/* /api/v1/auth/2fa/* /api/v1/auth/clear-site-data \
+        /api/v1/public/* /api/v1/me /api/v1/me/* \
+        /api/v1/csp-report /api/v1/errors /api/health \
+        /_next/* /favicon* /barvea-mark.svg /icon-192.png /icon-512.png /manifest.json /fonts/* /build-info.json
+    handle @adminAllowed {
+        # Największe ciało pod panelem = kawałek wydania instalatora (8 MB, serwer do 16 MB)
+        # i medium CMS 10 MB (APP 2026-11-23). Reszta = małe JSON-y.
+        request_body {
+            max_size 20MB
         }
+        reverse_proxy app:3005 {
+            header_up X-Real-IP {client_ip}
+            # Pod hostem panelu appka NIGDY nie uwierzytelnia certyfikatem urządzenia; nagłówki
+            # tożsamości mTLS i dowód Caddy zdejmujemy, cokolwiek przysłał klient.
+            header_up -X-Client-Cert-Subject
+            header_up -X-Client-Cert-Issuer
+            header_up -X-Client-Cert-Serial
+            header_up -X-Barvea-Mtls-Proof
+            header_up X-Forwarded-For {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+            header_up Host {host}
+            transport http {
+                read_timeout 120s
+                write_timeout 120s
+                dial_timeout 10s
+            }
+        }
+    }
+    handle {
+        @get method GET
+        redir @get https://app.barvea.com{uri} 302
+        respond 404
     }
 
     log {
