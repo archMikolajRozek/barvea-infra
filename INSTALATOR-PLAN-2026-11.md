@@ -9,7 +9,7 @@ i dalsze zmiany appki = nowy bundle + `deploy-app`, bez dotykania instalatora.
 |---|---|---|
 | `wizard.sh` | napisany 07-14, NIETESTOWANY | brak: pule fast/bulk, backup-skip + backup-enable, ekran Vault, admin, handover, moduł Drive, nazwy hostów |
 | `bootstrap.sh` | E2E na VM 999 07-14 (preset staging) | brak wszystkiego z 09–11: dnsmasq tunelu, veto Samby, ClamAV, unattended `20auto-upgrades`, pule, VM 102 8c/32G, Caddy bez Cloudflare, admin host, restic |
-| `deploy-app.dedicated.sh` | napisany, NIGDY nieuruchomiony | env.template z lipca (dziś ~110 zmiennych w `.env.example`), compose dedyka ma app/dwg/office/pcp/collab + postgres/redis, BRAK ifc-clash/ifc-extractor, nadal minio (K1: out); env.template NIE ISTNIEJE; brak sekretów nowych (TOTP, MTLS, IFC_*, COLLAB_*) |
+| `deploy-app.dedicated.sh` | napisany, NIGDY nieuruchomiony | env.template z lipca (dziś ~110 zmiennych w `.env.example`), compose dedyka ma app/dwg/office/pcp/collab + postgres/redis, BRAK ifc-clash/ifc-extractor; minio zostaje (korekta 24.11 niżej); env.template NIE ISTNIEJE; brak sekretów nowych (TOTP, MTLS, IFC_*, COLLAB_*) |
 | `build-release-bundle.sh` | 1 bundle zbudowany 07-14 | tylko app+dwg+postgres+redis(+minio — K1: MinIO wypada) |
 | `build-offline-assets.sh` | eksperymentalny | integracja air-gap (mirror apt) nieskończona |
 | VM 999 staging (nested PVE, 12 G, 10.10.0.99) | migawka `czysty-bootstrap` | 12 G za mało na VM 102 jak prod → preset staging z małymi gośćmi |
@@ -38,6 +38,8 @@ i dalsze zmiany appki = nowy bundle + `deploy-app`, bez dotykania instalatora.
 ### D3 — `bootstrap.sh` v2
 - Pule `fast`/`bulk` (phase_host): zvole VM na fast, `orgs` na bulk, śluza uploadu (scsi1) na fast.
 - Goście wg presetu z modułów: VM 102 RAM = 8 G + suma sufitów włączonych sidecarów (prod: 32 G).
+- **MinIO ZOSTAJE (korekta APP 24.11: 59 plików appki używa magazynu obiektów — IFC, podglądy, zdjęcia, raporty, QR, migawki współedycji; datad/ZFS = tylko dokumenty CDE; lipcowe „MinIO out” dotyczyło tylko Drive).** Full: natywnie na VM 101 jak prod (svc_data: binarka z ASSETS_DIR/download, minio.service, user barvea_app_minio + policy z proxmox/minio-policy-barvea-app.json, buckety, restic /mnt/minio-data). Compact: kontener pod profilem compact. MINIO_PUBLIC_ENDPOINT zawsze puste.
+- APP 24.11 (b7d53675): `app/deploy/dedicated/.env.dedicated.template` — 102 zmienne, znaczniki nad zmienną [GEN:…]/[KREATOR]/[INFRA]/[STALA]/[PUSTA]/[BUNDLE]/[COMPOSE]; [GEN]/[INFRA] puste → deploy-app v2 wypełnia, merge pomija ustawione. Stałe: CSP_MODE=enforce, DRIVE_SMB_ACCOUNTS=per-org, REGISTRATION_ENABLED=false, ADMIN_SESSION_IDLE_MIN=30, AV_MODE=off→block z kreatora.
 - VM 100: + dnsmasq (`network/dnsmasq-wg-users.conf`, INPUT 53 w wg-users), + `20auto-upgrades`.
 - LXC 201: + veto globalne (`storage/samba/barvea-veto.conf`), + ClamAV natywny z socketem TCP (gdy AV on), + `20auto-upgrades`, acl-sync z `ORG_SLUGS` pustym (org-provision później).
 - VM 102: Caddy **bez** `trusted_proxies` Cloudflare (on-prem: `client_ip` = adres TCP; wariant z CF tylko gdy FQDN publiczny + CF), vhost `admin.<domena>` (internal-CA), mTLS jak prod, `docker-prune.timer` (jest), scratch sidecarów (jest).
@@ -65,7 +67,7 @@ i dalsze zmiany appki = nowy bundle + `deploy-app`, bez dotykania instalatora.
 
 ### Ustalenia z APP 23.11 (zakres potwierdzony przez Miko: „dodajemy wszystko”)
 - Kolejność APP: env.template → compose → bootstrap-instance → bundle+MANIFEST → sprawdzenia CSP/AV/air-gap.
-- Profile compose: zawsze app, caddy, dwg-converter, office-converter; `pointcloud` (pcp 12 g), `collab` (1 g), `ifc` (ifc-clash + ifc-extractor 16 g), `compact` (postgres:18 + redis w compose), `av` (full: nic — clamd natywnie LXC 201; compact: kontener clamav), `drive` = tylko env (full). Kreator → `COMPOSE_PROFILES` w .env.production.
+- Profile compose: zawsze app, caddy, dwg-converter, office-converter; `pointcloud` (pcp 12 g), `collab` (1 g), `ifc` (ifc-clash + ifc-extractor 16 g), `compact` (postgres:18 + redis + MINIO w compose), `av` (full: nic — clamd natywnie LXC 201; compact: kontener clamav), `drive` = tylko env (full). Kreator → `COMPOSE_PROFILES` w .env.production.
 - `--force-2fa` = TOTP admina przy pierwszym logowaniu + org z „2FA wymagane dla wszystkich”. Hasło admina generuje instalator (env BOOTSTRAP_ADMIN_PASSWORD, nie argv).
 - MANIFEST.json {bundleVersion, buildDate, appCommit, deploymentMode, images[{service,image,tag,imageId,tarSha256}], files[{path,sha256}], minInstallerVersion, profiles} + detached MANIFEST.sig Ed25519 kluczem Vault `update-manifest-ed25519` (nie license-ed25519); deploy-app sprawdza podpis, sha images.tar, `buildDate <= updatesUntil`.
 
