@@ -369,6 +369,12 @@ admin.barvea.com {
     @notForAdmin path /api/v1/internal /api/v1/internal/* /api/v1/drive/* /api/v1/orgs/*/drive/* /_collab /_collab/* /dl/*
     respond @notForAdmin 404
 
+    # Największe ciało pod panelem = kawałek wydania instalatora (8 MB, serwer do 16 MB)
+    # i medium CMS 10 MB (APP 2026-11-23). Reszta = małe JSON-y.
+    request_body {
+        max_size 20MB
+    }
+
     reverse_proxy app:3005 {
         header_up X-Real-IP {client_ip}
         header_up X-Forwarded-For {remote_host}
