@@ -342,6 +342,56 @@ https://app.barvea.internal {
 # ═══════════════════════════════════════════════════════════════
 # www.barvea.com — 301 redirect to apex
 # ═══════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════
+# Panel administratora platformy — admin.barvea.com (APP 2026-11-23, decyzja Miko:
+# TEN SAM kontener app, osobny host, publicznie za Cloudflare, bez Access).
+# Aplikacja rozpoznaje panel po nagłówku Host (ADMIN_HOST w .env.production); do
+# czasu ustawienia ADMIN_HOST host odpowiada jak zwykła appka. Po włączeniu: tu
+# tylko /admin, /api/v1/admin, logowanie + 2FA za każdym razem (bez zaufanej
+# przeglądarki), sesja 30 min bezczynności (Redis), reszta 404/redirect na app.
+# Bez mTLS (Drive tu nie wchodzi), bez tras upload/stream (panel = małe JSON-y).
+# TLS: automatyczny (ACME) jak app.barvea.com — rekord DNS musi istnieć PRZED reloadem.
+# ═══════════════════════════════════════════════════════════════
+admin.barvea.com {
+    encode zstd gzip
+
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()"
+        Cross-Origin-Opener-Policy "same-origin"
+        -Server
+        -X-Powered-By
+    }
+
+    # Trasy wewnętrzne i Drive nigdy pod hostem panelu (defense-in-depth; appka i tak 404-uje).
+    @notForAdmin path /api/v1/internal /api/v1/internal/* /api/v1/drive/* /api/v1/orgs/*/drive/* /_collab /_collab/* /dl/*
+    respond @notForAdmin 404
+
+    reverse_proxy app:3005 {
+        header_up X-Real-IP {client_ip}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+        header_up Host {host}
+        transport http {
+            read_timeout 120s
+            write_timeout 120s
+            dial_timeout 10s
+        }
+    }
+
+    log {
+        output file /data/admin-access.log {
+            roll_size 50MiB
+            roll_keep 14
+            roll_keep_for 720h
+        }
+        format json
+        level INFO
+    }
+}
+
 www.barvea.com {
     redir https://barvea.com{uri} 301
 }

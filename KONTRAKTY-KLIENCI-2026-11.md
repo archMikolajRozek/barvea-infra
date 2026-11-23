@@ -57,6 +57,9 @@ Uwaga Caddy: `*` w `path` łapie JEDEN segment. `/foo/*` nie łapie gołego `/fo
 - Tylko `app.barvea.com`; Configuration Rule CF `mobile-api-no-challenge` (BIC off dla `/api/`, `/dl/`, `/.well-known/`); `@mobileStream` dla dużych pobrań; UA `BARVEA-Mobile/`, `X-Barvea-Client: mobile`, `X-Barvea-App-Version`. FCM na prodzie (`FCM_SERVICE_ACCOUNT_JSON`); APNs odłożone (iOS nie ruszył). Staging `staging.app.barvea.com` — decyzja: robimy (listopad 2026).
 
 ## 6. APP (serwer) — ustalenia z infrą
+- Panel administratora: `admin.barvea.com` (decyzja Miko 23.11) = ten sam kontener app, osobny vhost Caddy (bez mTLS,
+  bez upload/stream, 404 na internal/Drive/collab/dl), rozpoznawany po `Host`; włącza `ADMIN_HOST` w env. Logowanie
+  tylko role platformy + 2FA za każdym razem, sesja osobna, 30 min bezczynności w Redisie (bez Redisa panel zamknięty).
 - MinIO (10.10.0.20:9000) NIE jest publiczne i nie będzie; `MINIO_PUBLIC_ENDPOINT` nieustawione. Każdy plik do przeglądarki idzie przez appkę (`/api`, `/dl/`), np. raporty kolizji `GET /api/v1/clash-reports/{id}/download?t=<HMAC 15 min>` (≤ kilka MB, catch-all wystarcza).
 - Kontener `app` bez `mem_limit`; VM 102 = 32 G; sufity sidecarów: dwg 3g, office 3g, pcp 12g, collab 1g, ifc-clash 12g, ifc-extractor 4g.
 - Migracje: `prisma migrate deploy` w transakcji → `CREATE INDEX CONCURRENTLY` niemożliwe w migracji; duże indeksy = krok ręczny. Deploy wieczorem, pre-deploy pg_dump (retencja 30).
