@@ -63,9 +63,15 @@ i dalsze zmiany appki = nowy bundle + `deploy-app`, bez dotykania instalatora.
 - Drive: lista endpointów klienta dla dedyka (hosty `*.<domena>` zamiast `barvea.internal`) — czy klient obsługuje inną domenę wewnętrzną (dziś pin SPKI + nazwy w appsettings).
 - Plugin: „własny serwer” w kliencie = `https://app.<domena>` z CA organizacji (import CA do Windows przy instalacji Drive?).
 
-## 3. Decyzje do potwierdzenia przez Miko (D1)
-1. Domena wewnętrzna dedyka: stała `barvea.internal` (prościej dla Drive/pluginu) czy per klient (`<klient>.local`)? **Rekomendacja: stała `barvea.internal`** — klienci są odcięci sieciowo, kolizji nie będzie, a klienci Drive/plugin mają jedną konfigurację.
-2. Vault: automatyczny `operator init` w bootstrapie z zapisem do pliku 0600 (operator zabiera plik) — tak / tylko ręcznie jak dziś?
-3. Test na VM 999: preset staging (mali goście, bez ciężkich sidecarów) wystarczy do walidacji ścieżki; pełny rozmiar tylko u klienta — zgoda?
-4. Moduły domyślne dla pierwszego dedyka: Drive on, AV on, współedycja on, kolizje/IFC on (RAM VM 102 ≥ 32 G) — zgoda?
-5. SMB a 2FA per org (korekta po uwadze Drive 23.11): hasło SMB jest JEDNO dla usera we wszystkich jego org → żywa sesja w A pozwala ręcznie zamontować udział B bez kodu dla B (omija zaufanie per org, nie uprawnienia). Opcje: (a) zostawić bramkę w API/kliencie (ryzyko akceptowalne?), (b) **osobne konto Samby per (user, org)** — każde tylko w grupie swojej org, `sessions/start` dla org B wydaje poświadczenia B; zmiana smb-provisiond (provision z orgId) + kontrakt APP, bez dynamicznych grup. Rekomendacja infra: (b), 1–2 wieczory + APP. Decyzja Miko.
+## 3. Decyzje Miko — PODJĘTE 2026-11-23 wieczorem
+1. Domena wewnętrzna dedyka: **stała `barvea.internal`** (tak nazywa się system; klienci Drive/plugin = jedna konfiguracja).
+2. Vault: **automatyczny `operator init` w bootstrapie, klucze + root token do pliku 0600** (`/root/barvea-vault-keys.json`), operator zabiera plik poza serwer i potwierdza; tryb „podział Shamira” nadal opcją w kreatorze.
+3. Test na VM 999: **ta sama struktura (5 gości), małe maszyny** — tylko walidacja ścieżki.
+4. Moduły: **wybierane w kreatorze** (Drive, AV, współedycja, kolizje/IFC, chmury punktów), przy każdym informacja „+X GB RAM / +Y CPU”, na dole **licznik rekomendowanego RAM/CPU total** (baza 8 G + sufity: pcp 12, ifc-clash 12, ifc-extractor 4, office 3, dwg 3, collab 1; AV +1 G na LXC 201) i ostrzeżenie, gdy host ma mniej.
+5. SMB a 2FA per org: **udziały rozłączne per organizacja** — osobne konto Samby na parę (użytkownik, org), każde tylko w grupie swojej org; `sessions/start` dla org B wydaje poświadczenia B dopiero po kodzie dla B. Osobny strumień S1 (poniżej), wchodzi na prod przed pierwszym dedykiem.
+
+## 4. Strumień S1 — konta Samby per (użytkownik, org) [prod + instalator]
+- Infra: `smb-provisiond` — provision/deprovision z `orgId`: nazwa konta `u_<userKey>_<orgKey>` (limit 32 znaki Samby → skróty), uid z puli, grupa primary = `org-<orgId>`, żadnych innych grup; hasło per konto; `acl-sync` bez zmian (ACL po grupach org). Migracja istniejących: dla każdego usera × org z grupy → nowe konto, stare konto usunięte po przełączeniu klientów.
+- APP: `sessions/start`/`/devices/me` zwracają `smb_config` dla org docelowej (login per org), provisioning woła smb-provisiond z orgId; kontrakt — dokument od APP.
+- Drive: montuje udział org z poświadczeniami z sesji tej org (dziś już tak, tylko login będzie inny per org); przełączenie org = nowe poświadczenia.
+- Kolejność: kontrakt APP → smb-provisiond (infra, test na VM 999) → APP → migracja kont na prod w oknie → Drive bez zmian kodu (do potwierdzenia).
