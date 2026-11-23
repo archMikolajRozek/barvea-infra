@@ -68,4 +68,4 @@ i dalsze zmiany appki = nowy bundle + `deploy-app`, bez dotykania instalatora.
 2. Vault: automatyczny `operator init` w bootstrapie z zapisem do pliku 0600 (operator zabiera plik) — tak / tylko ręcznie jak dziś?
 3. Test na VM 999: preset staging (mali goście, bez ciężkich sidecarów) wystarczy do walidacji ścieżki; pełny rozmiar tylko u klienta — zgoda?
 4. Moduły domyślne dla pierwszego dedyka: Drive on, AV on, współedycja on, kolizje/IFC on (RAM VM 102 ≥ 32 G) — zgoda?
-5. SMB a 2FA per org: zostawiamy bramkę w API/kliencie (hasło SMB tylko w sesji), bez dynamicznych grup Samby — zgoda?
+5. SMB a 2FA per org (korekta po uwadze Drive 23.11): hasło SMB jest JEDNO dla usera we wszystkich jego org → żywa sesja w A pozwala ręcznie zamontować udział B bez kodu dla B (omija zaufanie per org, nie uprawnienia). Opcje: (a) zostawić bramkę w API/kliencie (ryzyko akceptowalne?), (b) **osobne konto Samby per (user, org)** — każde tylko w grupie swojej org, `sessions/start` dla org B wydaje poświadczenia B; zmiana smb-provisiond (provision z orgId) + kontrakt APP, bez dynamicznych grup. Rekomendacja infra: (b), 1–2 wieczory + APP. Decyzja Miko.
