@@ -288,7 +288,7 @@ def manifest_accounts():
     top-level `smbAccounts` (pełna lista osób z dostępem Drive w org). Bez niej
     bierzemy entries[].smbUsername — niepełne (osoba bez wpisów folderowych
     zniknęłaby) → wtedy rekoncyliacja NIE wyłącza, tylko raportuje."""
-    accounts, explicit, n = set(), True, 0
+    explicit_accounts, entry_accounts, explicit, n = set(), set(), True, 0
     for path in glob.glob(os.path.join(CFG["ACL_STATE_DIR"], "*.manifest.json")):
         try:
             with open(path) as f:
@@ -303,19 +303,27 @@ def manifest_accounts():
             for a in lst:
                 name = a.get("smbUsername") if isinstance(a, dict) else a
                 if isinstance(name, str):
-                    accounts.add(name)
+                    explicit_accounts.add(name)
         else:
             explicit = False
         for proj in m.get("projects", []) or []:
             for fo in proj.get("folders", []) or []:
                 for e in (fo.get("acl") or {}).get("entries", []) or []:
                     if e.get("smbUsername"):
-                        accounts.add(e["smbUsername"])
+                        entry_accounts.add(e["smbUsername"])
                 for fe in fo.get("files", []) or []:
                     for e in fe.get("entries", []) or []:
                         if e.get("smbUsername"):
-                            accounts.add(e["smbUsername"])
-    return accounts, (explicit and n > 0)
+                            entry_accounts.add(e["smbUsername"])
+    explicit = explicit and n > 0
+    if explicit:
+        # Lista jawna jest JEDYNYM źródłem decyzji keep/disable. Wpisy folderowe
+        # nie mogą jej poszerzać (przegląd bezpieczeństwa 2026-11-24) — tylko raport.
+        stray = sorted(entry_accounts - explicit_accounts)
+        if stray:
+            log(f"reconcile: wpisy ACL bez konta w smbAccounts (zgłosić APP): {stray}")
+        return explicit_accounts, True
+    return explicit_accounts | entry_accounts, False
 
 
 def local_accounts():
