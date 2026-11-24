@@ -104,7 +104,8 @@ fetch(){ # fetch <url> <dst> — ASSETS_DIR first (air-gap), inaczej download
   curl -fsSL -o "$dst" "$url"
 }
 vm_ssh(){ local ip="$1"; shift; ssh -o StrictHostKeyChecking=accept-new -i "$KEY" "$CI_USER@$ip" "sudo bash -c '$*'"; }
-vm_put(){ local ip="$1" src="$2" dst="$3"; scp -o StrictHostKeyChecking=accept-new -i "$KEY" "$src" "$CI_USER@$ip:/tmp/.bp.$$"; vm_ssh "$ip" "mv /tmp/.bp.$$ $dst"; }
+# vm_put: plik przez stdin → `install` jako root (bez etapu w /tmp gościa — przegląd 2026-11-24); $4 = mode (domyślnie 644)
+vm_put(){ local ip="$1" src="$2" dst="$3" mode="${4:-644}"; ssh -o StrictHostKeyChecking=accept-new -i "$KEY" "$CI_USER@$ip" "sudo install -m $mode -o root -g root -D /dev/stdin $dst" < "$src"; }
 wait_ssh(){ local ip="$1" n=0; until ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=3 -i "$KEY" "$CI_USER@$ip" true 2>/dev/null; do n=$((n+1)); [ $n -gt 60 ] && die "ssh $ip timeout"; sleep 5; done; }
 
 # ═══ FAZA: preflight ════════════════════════════════════════════════
@@ -309,7 +310,7 @@ svc_infra() {  # VM 100 — WG hub + wg-provisiond
   # DNS tunelu wg-users: *.barvea.internal → app/storage (macOS Drive nie ma hosts). Tylko na wg-users.
   vm_put "$ip" "$REPO_DIR/network/dnsmasq-wg-users.conf" /etc/dnsmasq.d/wg-users.conf
   vm_ssh "$ip" "systemctl enable --now dnsmasq; systemctl restart dnsmasq"
-  vm_put "$ip" "$REPO_DIR/wg-control/wg-provisiond.py" /usr/local/sbin/wg-provisiond.py
+  vm_put "$ip" "$REPO_DIR/wg-control/wg-provisiond.py" /usr/local/sbin/wg-provisiond.py 755
   vm_put "$ip" "$REPO_DIR/wg-control/wg-provisiond.service" /etc/systemd/system/wg-provisiond.service
   local WGTOK; WGTOK=$(gen); cred "WG_PROVISIOND_TOKEN=$WGTOK"
   vm_ssh "$ip" "mkdir -p /etc/barvea; printf 'TOKEN=$WGTOK\n' > /etc/barvea/wg-provisiond.env; chmod 600 /etc/barvea/wg-provisiond.env
@@ -359,7 +360,7 @@ SQLEOF
   local SEC=/tmp/.ds.$$; (umask 077; printf 'RP=%s\nMROOT=%s\nMPASS=%s\nMAK=%s\nMSK=%s\n' "$RP" "barvea_root" "$(gen 40)" "barvea_app_minio" "$(gen 40)" > "$SEC")
   # shellcheck disable=SC1090
   . "$SEC"; cred "MINIO_ROOT_USER=$MROOT MINIO_ROOT_PASSWORD=$MPASS"; cred "MINIO_ACCESS_KEY=$MAK MINIO_SECRET_KEY=$MSK"; cred "MINIO_ENDPOINT=$ip"
-  vm_put "$ip" "$SEC" /root/.barvea-data-secrets; rm -f "$SEC"
+  vm_put "$ip" "$SEC" /root/.barvea-data-secrets 600; rm -f "$SEC"
   vm_ssh "$ip" "chmod 600 /root/.barvea-data-secrets; . /root/.barvea-data-secrets
     DEBIAN_FRONTEND=noninteractive apt-get install -y redis-server >/dev/null
     sed -i -E \"s/^bind .*/bind 127.0.0.1 $ip/; s/^# *requirepass .*/requirepass \$RP/; s/^requirepass .*/requirepass \$RP/\" /etc/redis/redis.conf
