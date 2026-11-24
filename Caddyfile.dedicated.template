@@ -189,7 +189,7 @@ https://__ADMIN_HOST__ {
         -Server
         -X-Powered-By
     }
-    @adminAllowed path / /admin /admin/* /api/v1/admin/* /login /login/* /2fa /2fa/* /blocked /blocked/* /api/auth/* /api/v1/auth/2fa/* /api/v1/auth/clear-site-data /api/v1/public/* /api/v1/me /api/v1/me/* /api/v1/csp-report /api/v1/errors /api/health /_next/* /favicon* /barvea-mark.svg /icon-192.png /icon-512.png /manifest.json /fonts/* /build-info.json
+    @adminAllowed path / /admin /admin/* /api/v1/admin/* /login /login/* /2fa /2fa/* /blocked /blocked/* /api/auth/* /api/v1/auth/2fa/* /api/v1/auth/clear-site-data /api/v1/public/* /api/v1/me /api/v1/me/* /api/v1/csp-report /api/v1/errors /api/health /_next/* /favicon* /icon.svg /icon* /apple-icon* /barvea-mark.svg /manifest* /fonts/* /build-info.json
     handle @adminAllowed {
         request_body {
             max_size 20MB

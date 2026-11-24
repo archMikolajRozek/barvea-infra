@@ -409,7 +409,7 @@ admin.barvea.com {
         /api/auth/* /api/v1/auth/2fa/* /api/v1/auth/clear-site-data \
         /api/v1/public/* /api/v1/me /api/v1/me/* \
         /api/v1/csp-report /api/v1/errors /api/health \
-        /_next/* /favicon* /barvea-mark.svg /icon-192.png /icon-512.png /manifest.json /fonts/* /build-info.json
+        /_next/* /favicon* /icon.svg /icon* /apple-icon* /barvea-mark.svg /manifest* /fonts/* /build-info.json
     handle @adminAllowed {
         # Największe ciało pod panelem = kawałek wydania instalatora (8 MB, serwer do 16 MB)
         # i medium CMS 10 MB (APP 2026-11-23). Reszta = małe JSON-y.
