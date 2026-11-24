@@ -35,9 +35,15 @@ REPO_PATH="${SFTP_PATH#/}"; REPO_PATH="${REPO_PATH:-barvea-restic}"
 
 log(){ printf '\n\033[1;36m── %s\033[0m\n' "$*"; }
 vm_ssh(){ local ip="$1"; shift; ssh -o StrictHostKeyChecking=accept-new -i "$KEY" "$CI_USER@$ip" "sudo bash -c '$*'"; }
-vm_put(){ local ip="$1" src="$2" dst="$3"; scp -q -o StrictHostKeyChecking=accept-new -i "$KEY" "$src" "$CI_USER@$ip:/tmp/.be.$$"; vm_ssh "$ip" "mv /tmp/.be.$$ $dst"; }
+# vm_put: plik przez stdin → `install` (bez /tmp na gościu, bez TOCTOU); $4 = mode (domyślnie 755)
+vm_put(){ local ip="$1" src="$2" dst="$3" mode="${4:-755}"; ssh -o StrictHostKeyChecking=accept-new -i "$KEY" "$CI_USER@$ip" "sudo install -m $mode -o root -g root /dev/stdin $dst" < "$src"; }
+# vm_secret: sekret przez stdin (nigdy w argv ssh)
+vm_secret(){ local ip="$1" dst="$2"; ssh -o StrictHostKeyChecking=accept-new -i "$KEY" "$CI_USER@$ip" "sudo install -m 600 -o root -g root -D /dev/stdin $dst"; }
 
-NODES=("host" "${LAN}.20" "${LAN}.30")   # host, VM 101 data, VM 102 app (VM 100 = tylko klucze WG → w backupie hosta? NIE: /etc/wireguard VM100 → TODO)
+NODES=("host" "${LAN}.20" "${LAN}.30")   # host, VM 101 data, VM 102 app (VM 100 /etc/wireguard → TODO)
+# Model zaufania (jak prod, decyzja projektowa): JEDNO repo restic i JEDNO hasło dla wszystkich węzłów
+# instancji (jedna domena zaufania, jeden operator). Izolacja per węzeł = osobne repo/konto SFTP —
+# świadomie NIE (koszt obsługi u klienta); forget/prune per --host.
 
 log "1. hasło repo restic"
 PW="${RESTIC_PASSWORD:-}"
@@ -46,7 +52,8 @@ if [ -f /root/.config/restic/password ]; then PW=$(cat /root/.config/restic/pass
 mkdir -p /root/.config/restic && printf '%s' "$PW" > /root/.config/restic/password && chmod 600 /root/.config/restic/password
 command -v restic >/dev/null || apt-get install -y restic jq >/dev/null
 for ip in "${NODES[@]:1}"; do
-  vm_ssh "$ip" "command -v restic >/dev/null || DEBIAN_FRONTEND=noninteractive apt-get install -y restic jq >/dev/null; mkdir -p /root/.config/restic; printf %s \"$PW\" > /root/.config/restic/password; chmod 600 /root/.config/restic/password"
+  vm_ssh "$ip" "command -v restic >/dev/null || DEBIAN_FRONTEND=noninteractive apt-get install -y restic jq >/dev/null"
+  printf %s "$PW" | vm_secret "$ip" /root/.config/restic/password   # stdin, nie argv
 done
 
 log "2. klucze ssh per węzeł + alias storagebox"
@@ -89,15 +96,16 @@ cp backup/barvea-backup.host.service /etc/systemd/system/barvea-backup.service
 cp backup/barvea-backup.host.timer   /etc/systemd/system/barvea-backup.timer
 systemctl daemon-reload && systemctl enable --now barvea-backup.timer
 # VM 101: pg_dump + MinIO (03:09)
-sed "s|^export RESTIC_REPOSITORY=.*|export RESTIC_REPOSITORY=\"\${RESTIC_REPOSITORY:-sftp:storagebox:$REPO_PATH}\"|" backup/barvea-data-backup.sh > /tmp/.bd.$$
-vm_put "${LAN}.20" /tmp/.bd.$$ /usr/local/sbin/barvea-data-backup.sh; rm -f /tmp/.bd.$$
+TMPD=$(mktemp -d); chmod 700 "$TMPD"; trap 'rm -rf "$TMPD"' EXIT
+sed "s|^export RESTIC_REPOSITORY=.*|export RESTIC_REPOSITORY=\"\${RESTIC_REPOSITORY:-sftp:storagebox:$REPO_PATH}\"|" backup/barvea-data-backup.sh > "$TMPD/bd.sh"
+vm_put "${LAN}.20" "$TMPD/bd.sh" /usr/local/sbin/barvea-data-backup.sh
 vm_ssh "${LAN}.20" "chmod 755 /usr/local/sbin/barvea-data-backup.sh
   printf '[Unit]\nDescription=Barvea DATA nightly backup (pg_dump+minio) to SFTP\nAfter=network-online.target postgresql.service\n[Service]\nType=oneshot\nExecStart=/usr/local/sbin/barvea-data-backup.sh\nTimeoutStartSec=4h\n' > /etc/systemd/system/barvea-backup.service
   printf '[Unit]\nDescription=Run Barvea DATA backup nightly 03:09\n[Timer]\nOnCalendar=*-*-* 03:09:00\nRandomizedDelaySec=15min\nPersistent=true\n[Install]\nWantedBy=timers.target\n' > /etc/systemd/system/barvea-backup.timer
   systemctl daemon-reload && systemctl enable --now barvea-backup.timer"
 # VM 102: ~/barvea (+ .env.production = sekrety instancji!) + wolumeny Caddy (03:45)
-sed -e "s|^export RESTIC_REPOSITORY=.*|export RESTIC_REPOSITORY=\"sftp:storagebox:$REPO_PATH\"|" -e "s|/home/miko/barvea|/home/$CI_USER/barvea|g" backup/barvea-app-backup.sh > /tmp/.ba.$$
-vm_put "${LAN}.30" /tmp/.ba.$$ /usr/local/sbin/barvea-app-backup.sh; rm -f /tmp/.ba.$$
+sed -e "s|^export RESTIC_REPOSITORY=.*|export RESTIC_REPOSITORY=\"sftp:storagebox:$REPO_PATH\"|" -e "s|/home/miko/barvea|/home/$CI_USER/barvea|g" backup/barvea-app-backup.sh > "$TMPD/ba.sh"
+vm_put "${LAN}.30" "$TMPD/ba.sh" /usr/local/sbin/barvea-app-backup.sh
 vm_ssh "${LAN}.30" "chmod 755 /usr/local/sbin/barvea-app-backup.sh
   printf '[Unit]\nDescription=Barvea APP nightly backup to SFTP\nAfter=network-online.target docker.service\n[Service]\nType=oneshot\nExecStart=/usr/local/sbin/barvea-app-backup.sh\nTimeoutStartSec=2h\n' > /etc/systemd/system/barvea-backup.service
   printf '[Unit]\nDescription=Run Barvea APP backup nightly 03:45\n[Timer]\nOnCalendar=*-*-* 03:45:00\nRandomizedDelaySec=15min\nPersistent=true\n[Install]\nWantedBy=timers.target\n' > /etc/systemd/system/barvea-backup.timer
