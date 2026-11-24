@@ -529,6 +529,12 @@ svc_app() {    # VM 102 — docker + szkielet; DEPLOY APLIKACJI = bundle/deploy.
       install -d -o 57439 -g 57439 /srv/upload-tmp/pcp-scratch /srv/upload-tmp/clash-scratch /srv/upload-tmp/ifc-extractor-scratch
     else echo '⚠️  brak /dev/sdb — śluza uploadu NIE utworzona (dysk scsi1?)'; fi"
   vm_ssh "$ip" "mkdir -p /home/$CI_USER/barvea && chown $CI_USER: /home/$CI_USER/barvea"
+  # journald trwały (logi kontenera app przez driver journald przeżywają recreate): 2 GB, 60 dni
+  vm_ssh "$ip" "mkdir -p /var/log/journal /etc/systemd/journald.conf.d; printf '[Journal]
+Storage=persistent
+SystemMaxUse=2G
+MaxRetentionSec=60day
+' > /etc/systemd/journald.conf.d/barvea.conf; systemctl restart systemd-journald"
   # Sprzatanie docker build cache (rosnie ~37 GB na deploy; bez timera root 75 G
   # zapelnia sie po 2 deployach — prod 2026-08-31).
   vm_put "$ip" "$REPO_DIR/vm102/systemd/docker-prune.service" /etc/systemd/system/docker-prune.service

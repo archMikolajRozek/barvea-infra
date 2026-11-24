@@ -84,11 +84,14 @@ services:
       timeout: 10s
       retries: 5
       start_period: 60s
+    # 2026-11-24: journald zamiast json-file — json-file ginie przy KAŻDYM recreate (deploy),
+    # 24.11 przepadły linie „[fs-journal] … failed:” potrzebne APP do diagnozy. journald przeżywa
+    # recreate: `journalctl CONTAINER_NAME=barvea-app --since …` (docker compose logs też działa).
+    # VM 102: /var/log/journal persistent + SystemMaxUse (bootstrap svc_app / ręcznie na prod).
     logging:
-      driver: json-file
+      driver: journald
       options:
-        max-size: "20m"
-        max-file: "5"
+        tag: "{{.Name}}"
     # Container needs to reach 10.10.0.20 (barvea-data).
     # Default bridge network → SNAT via host → vmbr1 → barvea-data. Works out of the box.
     # If reachability fails, uncomment extra_hosts below.
