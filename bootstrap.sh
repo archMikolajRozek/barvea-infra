@@ -477,7 +477,10 @@ svc_storage() { # LXC 201 — Samba + datad + smb-provisiond + acl-sync
   # TCP 3310 przez override socketu — przy aktywacji socketu clamd ignoruje TCPSocket z conf
   pct exec 201 -- mkdir -p /etc/systemd/system/clamav-daemon.socket.d
   pct push 201 "$REPO_DIR/storage/clamav/clamav-daemon.socket-tcp.conf" /etc/systemd/system/clamav-daemon.socket.d/tcp.conf
-  pct exec 201 -- bash -c "systemctl daemon-reload; systemctl enable --now clamav-freshclam; freshclam --quiet || true; systemctl enable --now clamav-daemon.socket clamav-daemon"
+  # watchdog (2026-11-24): socket TCP po reboocie potrafi nie wstac → co 5 min test portu + restart
+  pct push 201 "$REPO_DIR/storage/clamav/clamd-watchdog.service" /etc/systemd/system/clamd-watchdog.service
+  pct push 201 "$REPO_DIR/storage/clamav/clamd-watchdog.timer"   /etc/systemd/system/clamd-watchdog.timer
+  pct exec 201 -- bash -c "systemctl daemon-reload; systemctl enable --now clamav-freshclam clamd-watchdog.timer; freshclam --quiet || true; systemctl enable --now clamav-daemon.socket clamav-daemon"
   for f in barvea-datad.py smb-provisiond.py barvea-acl-sync.py; do
       pct push 201 "$REPO_DIR/storage/$f" "/usr/local/sbin/$f"
       pct exec 201 -- chmod 755 "/usr/local/sbin/$f"

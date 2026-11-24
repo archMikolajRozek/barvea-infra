@@ -1,0 +1,6 @@
+[Unit]
+Description=BARVEA clamd watchdog (port 3310 → restart socketu+daemona)
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'timeout 3 bash -c "echo > /dev/tcp/10.10.0.40/3310" 2>/dev/null || { echo "clamd 3310 DOWN — restart"; systemctl restart clamav-daemon.socket clamav-daemon; }'
