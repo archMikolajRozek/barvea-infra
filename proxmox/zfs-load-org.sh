@@ -8,12 +8,15 @@
 # KEEP-IN-SYNC z żywym plikiem.
 set -euo pipefail
 VADDR="https://10.10.0.50:8200"
+ORGS_DS="hddpool/orgs"
+# bootstrap v2 (2026-11-24): pula orgów i adres Vaulta z konfiguracji (dedyk: pula bulk, inny LAN)
+[ -f /etc/barvea/zfs-load-org.conf ] && . /etc/barvea/zfs-load-org.conf
 . /etc/vault/storage-approle
 TOKEN=$(curl -sk --request POST --data "{\"role_id\":\"$VAULT_ROLE_ID\",\"secret_id\":\"$VAULT_SECRET_ID\"}" "$VADDR/v1/auth/approle/login" | jq -r '.auth.client_token')
 if [ -z "$TOKEN" ] || [ "$TOKEN" = null ]; then echo "approle login failed"; exit 1; fi
 for ct in /etc/zfs/keys/*.ct; do
   [ -e "$ct" ] || continue
-  org=$(basename "$ct" .ct); ds="hddpool/orgs/$org"
+  org=$(basename "$ct" .ct); ds="$ORGS_DS/$org"
   if [ "$(zfs get -H -o value keystatus "$ds" 2>/dev/null)" = available ]; then continue; fi
   PT=$(jq -n --arg ct "$(cat "$ct")" '{ciphertext:$ct}' | curl -sk -H "X-Vault-Token: $TOKEN" --data @- "$VADDR/v1/transit/decrypt/per-org-keys" | jq -r '.data.plaintext')
   printf '%s' "$PT" | base64 -d | zfs load-key "$ds"

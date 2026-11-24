@@ -352,6 +352,41 @@ SQLEOF
   rm -f "$SQL"
   vm_ssh "$ip" "sudo -u postgres psql -v ON_ERROR_STOP=1 -f /tmp/pg-init.sql && rm -f /tmp/pg-init.sql"
   # TODO tuning (świadomie stock jak prod): shared_buffers itd. — osobna decyzja
+
+  # ── Redis natywnie (prod: VM 101) — bind LAN, hasło → creds (REDIS_URL=redis://:<pw>@<ip>:6379)
+  local RP; RP=$(gen 32); cred "REDIS_PASSWORD=$RP"
+  vm_ssh "$ip" "DEBIAN_FRONTEND=noninteractive apt-get install -y redis-server >/dev/null
+    sed -i -E 's/^bind .*/bind 127.0.0.1 $ip/; s/^# *requirepass .*/requirepass $RP/; s/^requirepass .*/requirepass $RP/' /etc/redis/redis.conf
+    grep -q '^requirepass ' /etc/redis/redis.conf || echo 'requirepass $RP' >> /etc/redis/redis.conf
+    systemctl enable --now redis-server; systemctl restart redis-server"
+
+  # ── MinIO natywnie (prod: binarka + minio.service na VM 101; korekta APP 2026-11-24: MinIO ZOSTAJE —
+  #    IFC/podglądy/zdjęcia/raporty/QR/migawki; datad/ZFS = tylko dokumenty CDE). Dane: /mnt/minio-data
+  #    (dysk systemowy VM 101 200G; większe instancje: osobny dysk → TODO scsi1 z kreatora).
+  #    Pin wersji = prod (RELEASE.2025-09-07T16-13-09Z); air-gap: binarki minio/mc w ASSETS_DIR.
+  local MROOT MPASS MAK MSK; MROOT="barvea_root"; MPASS=$(gen 40); MAK="barvea_app_minio"; MSK=$(gen 40)
+  cred "MINIO_ROOT_USER=$MROOT MINIO_ROOT_PASSWORD=$MPASS"; cred "MINIO_ACCESS_KEY=$MAK MINIO_SECRET_KEY=$MSK"
+  local MV="${MINIO_RELEASE:-RELEASE.2025-09-07T16-13-09Z}"
+  local MB=/tmp/.minio.$$ MC=/tmp/.mc.$$
+  fetch "https://dl.min.io/server/minio/release/linux-amd64/archive/minio.$MV" "$MB"
+  fetch "https://dl.min.io/client/mc/release/linux-amd64/mc" "$MC"
+  vm_put "$ip" "$MB" /usr/local/bin/minio; vm_put "$ip" "$MC" /usr/local/bin/mc; rm -f "$MB" "$MC"
+  vm_put "$ip" "$REPO_DIR/proxmox/minio-policy-barvea-app.json" /tmp/minio-policy.json
+  vm_ssh "$ip" "chmod 755 /usr/local/bin/minio /usr/local/bin/mc
+    id minio-user >/dev/null 2>&1 || useradd -r -M -s /usr/sbin/nologin minio-user
+    mkdir -p /mnt/minio-data /etc/minio && chown minio-user: /mnt/minio-data
+    printf 'MINIO_ROOT_USER=%s\nMINIO_ROOT_PASSWORD=%s\nMINIO_VOLUMES=/mnt/minio-data\nMINIO_OPTS=--address $ip:9000 --console-address 127.0.0.1:9001\n' '$MROOT' '$MPASS' > /etc/minio/minio.conf
+    chmod 600 /etc/minio/minio.conf
+    printf '[Unit]\nDescription=MinIO\nAfter=network-online.target\n[Service]\nUser=minio-user\nGroup=minio-user\nEnvironmentFile=/etc/minio/minio.conf\nExecStart=/usr/local/bin/minio server \$MINIO_OPTS \$MINIO_VOLUMES\nRestart=always\nLimitNOFILE=65536\n[Install]\nWantedBy=multi-user.target\n' > /etc/systemd/system/minio.service
+    systemctl daemon-reload; systemctl enable --now minio; sleep 3
+    mc alias set local http://$ip:9000 '$MROOT' '$MPASS' >/dev/null
+    mc admin policy create local barvea-app-policy /tmp/minio-policy.json >/dev/null 2>&1 || true
+    mc admin user add local '$MAK' '$MSK' >/dev/null 2>&1 || true
+    mc admin policy attach local barvea-app-policy --user '$MAK' >/dev/null 2>&1 || true
+    for b in barvea-assets barvea-docs barvea-ifc barvea-qr barvea-reports; do mc mb -p local/\$b >/dev/null 2>&1 || true; done
+    rm -f /tmp/minio-policy.json"
+  # creds: MINIO_ENDPOINT=$ip MINIO_PORT=9000 MINIO_USE_SSL=false (deploy-app wpisuje z creds)
+  cred "MINIO_ENDPOINT=$ip"
 }
 
 svc_vault() {  # LXC 200 — Vault (init/unseal = RĘCZNA ceremonia po bootstrapie)
@@ -363,7 +398,53 @@ svc_vault() {  # LXC 200 — Vault (init/unseal = RĘCZNA ceremonia po bootstrap
   sed "s|__VAULT_IP__|${LAN}.50|" "$REPO_DIR/vault/vault.hcl.template" > /tmp/.vh.$$
   pct push 200 /tmp/.vh.$$ /etc/vault.d/vault.hcl; rm -f /tmp/.vh.$$
   pct push 200 "$REPO_DIR/vault/bootstrap-vault.sh" /root/bootstrap-vault.sh
-  pct exec 200 -- bash -c "chmod 755 /root/bootstrap-vault.sh; systemctl enable --now vault"
+  pct exec 200 -- bash -c "chmod 755 /root/bootstrap-vault.sh; systemctl enable --now vault; command -v jq >/dev/null || apt-get install -y jq >/dev/null"
+  if [ "$VAULT_KEYS" = file ]; then
+      # Decyzja Miko 2026-11-23: init automatyczny, komplet kluczy + root token do pliku 0600,
+      # operator ZABIERA plik poza serwer (handover). split = ceremonia ręczna (ramka niżej).
+      log "VAULT: init + unseal + bootstrap-vault (klucze → /root/barvea-vault-keys.json w LXC 200)"
+      pct exec 200 -- bash -c "export VAULT_ADDR=https://${LAN}.50:8200 VAULT_SKIP_VERIFY=1
+        for i in \$(seq 1 30); do vault status >/dev/null 2>&1 && break; vault status 2>/dev/null | grep -q Sealed && break; sleep 2; done
+        if vault status -format=json 2>/dev/null | jq -e '.initialized==false' >/dev/null; then
+            umask 077; vault operator init -key-shares=5 -key-threshold=3 -format=json > /root/barvea-vault-keys.json
+        fi
+        [ -s /root/barvea-vault-keys.json ] || { echo 'brak /root/barvea-vault-keys.json (Vault już zainicjowany bez pliku?)'; exit 1; }
+        for i in 0 1 2; do vault operator unseal \$(jq -r \".unseal_keys_b64[\$i]\" /root/barvea-vault-keys.json) >/dev/null; done
+        export VAULT_TOKEN=\$(jq -r .root_token /root/barvea-vault-keys.json)
+        cd /root && OUT_DIR=/root/vault-out GEN_APPROLE_CREDS=1 /root/bootstrap-vault.sh >/root/bootstrap-vault.log 2>&1 || { tail -20 /root/bootstrap-vault.log; exit 1; }
+        # cert wewnętrzny dla appki (SAN: app + admin host) z pki_int → /root/vault-out/internal.{crt,key}
+        vault write -format=json pki_int/issue/internal-server common_name=$APP_HOST alt_names=$ADMIN_HOST ip_sans=${LAN}.30 ttl=8760h > /root/vault-out/internal.json
+        python3 - <<'PYEOF'
+import json, os
+d = '/root/vault-out'; j = json.load(open(d + '/internal.json'))['data']
+open(d + '/internal.crt', 'w').write(j['certificate'] + '\\n' + '\\n'.join(j.get('ca_chain', [])) + '\\n')
+open(d + '/internal.key', 'w').write(j['private_key'] + '\\n'); os.chmod(d + '/internal.key', 0o600); os.remove(d + '/internal.json')
+PYEOF
+        unset VAULT_TOKEN"
+      # artefakty: root-ca → LXC 201 + VM 102; internal cert → VM 102 /etc/ssl/barvea; approle creds → creds
+      local VO=/tmp/.vo.$$; mkdir -p "$VO"
+      # katalogi docelowe istnieją ZANIM svc_storage/svc_app (kolejność faz: vault przed storage/app)
+      pct exec 201 -- mkdir -p /etc/barvea /etc/vault 2>/dev/null || true
+      vm_ssh "${LAN}.30" "mkdir -p /etc/ssl/barvea"
+      for f in root-ca.crt internal.crt internal.key barvea-app.role_id barvea-app.secret_id barvea-storage.role_id barvea-storage.secret_id; do
+          pct pull 200 "/root/vault-out/$f" "$VO/$f" 2>/dev/null || true
+      done
+      pct push 201 "$VO/root-ca.crt" /etc/barvea/root-ca.crt 2>/dev/null || true
+      for f in root-ca.crt internal.crt internal.key; do vm_put "${LAN}.30" "$VO/$f" "/etc/ssl/barvea/$f"; done
+      vm_ssh "${LAN}.30" "chmod 644 /etc/ssl/barvea/*.crt; chmod 600 /etc/ssl/barvea/internal.key"
+      cred "VAULT_APPROLE_ROLE_ID=$(cat "$VO/barvea-app.role_id" 2>/dev/null) VAULT_APPROLE_SECRET_ID=$(cat "$VO/barvea-app.secret_id" 2>/dev/null)"
+      cred "STORAGE_APPROLE_ROLE_ID=$(cat "$VO/barvea-storage.role_id" 2>/dev/null) STORAGE_APPROLE_SECRET_ID=$(cat "$VO/barvea-storage.secret_id" 2>/dev/null)"
+      # AppRole storage: HOST (zfs-load-org.sh: VAULT_ROLE_ID/VAULT_SECRET_ID) + kopia do LXC 201 (/etc/vault)
+      mkdir -p /etc/vault /etc/barvea
+      printf 'VAULT_ROLE_ID=%s\nVAULT_SECRET_ID=%s\n' "$(cat "$VO/barvea-storage.role_id" 2>/dev/null)" "$(cat "$VO/barvea-storage.secret_id" 2>/dev/null)" > /etc/vault/storage-approle && chmod 600 /etc/vault/storage-approle
+      pct push 201 /etc/vault/storage-approle /etc/vault/storage-approle --perms 600 2>/dev/null || true
+      # zfs-load-org.sh: pula orgów + adres Vaulta z konfiguracji (nie hardcode hddpool/10.10.0.50)
+      printf 'ORGS_DS=%s/orgs\nVADDR=https://%s.50:8200\n' "$ORGS_POOL" "$LAN" > /etc/barvea/zfs-load-org.conf
+      pct exec 200 -- rm -f /root/vault-out/barvea-app.secret_id /root/vault-out/barvea-storage.secret_id
+      rm -rf "$VO"
+      echo "  ✓ Vault zainicjowany; KLUCZE: /root/barvea-vault-keys.json w LXC 200 (pct pull 200 /root/barvea-vault-keys.json …) — ZABIERZ poza serwer i USUŃ."
+      return
+  fi
   cat <<CEREMONY
 
   ┌────────────────────────────────────────────────────────────────┐
