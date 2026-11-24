@@ -20,7 +20,11 @@
 #     → 404 org_not_provisioned (brak /srv/orgs/<org_id> lub grupy org-<id>)
 #     → 409 account_belongs_to_other_org (konto per org istnieje w innej grupie — nigdy nie dopisujemy)
 #     → 409 account_disabled (konto wyłączone przez rekoncyliację — rotate go nie włącza)
-#   DELETE /smb/user/<org_id>/<username> → 200 / 404
+#   DELETE /smb/user/<org_id>/<username> → 200 / 404 (zrywa też otwarte sesje konta)
+#   POST /smb/user/<org_id>/<username>/revoke {kill_sessions:true, disable:false, client_ip?}
+#     → 200 {sessions_killed:N, disabled} — natychmiastowe odcięcie (APP: odwołanie/utrata komputera,
+#       usunięcie z org); client_ip zawęża do jednego komputera (drugi komputer tej osoby nie traci
+#       uchwytów do plików centralnych Revita); disable:true dodatkowo smbpasswd -d.
 #   GET /healthz → {ok:true, version:2}
 #
 # Rekoncyliacja (timer smb-reconcile.timer, raz dziennie; także `--reconcile` ręcznie, `--dry-run`):
@@ -231,6 +235,7 @@ def deprovision_user(org_id, username):
         return 404, {"error": "user_not_in_org"}
     kind = username_kind(username)
     remaining = [g for g in user_org_groups(username) if g != grp]
+    killed = kill_sessions(username)   # DELETE zrywa otwarte sesje konta (APP woła revoke tuż przed, ale tanio)
     if kind == "v1" and remaining:
         # LEGACY multi-org: zdejmij tylko członkostwo w tej grupie.
         r = run(["gpasswd", "-d", username, grp])
@@ -247,6 +252,72 @@ def deprovision_user(org_id, username):
     _reconcile_forget(username)
     log(f"deleted({kind}): {username} (org {org_id[:10]}…)")
     return 200, {"applied": True, "action": "deleted"}
+
+
+# ── zrywanie sesji SMB (odcięcie natychmiastowe, APP revoke / DELETE) ──
+
+def smb_sessions(username, client_ip=None):
+    """PID-y smbd obsługujące sesje konta (opcjonalnie tylko z client_ip).
+    Samba ≥ 4.21: smbstatus -p -j (JSON); fallback: parsowanie tekstu."""
+    pids = []
+    r = run(["smbstatus", "-p", "-j"])
+    if r.returncode == 0 and r.stdout.strip().startswith("{"):
+        try:
+            data = json.loads(r.stdout)
+            for pid, sess in (data.get("sessions") or {}).items():
+                if sess.get("username") != username:
+                    continue
+                ip = (sess.get("remote_machine") or sess.get("hostname") or "")
+                ip = ip.replace("ipv4:", "").split(":")[0]
+                if client_ip and ip != client_ip:
+                    continue
+                pids.append(int(sess.get("pid") or pid.split(":")[0]))
+            return sorted(set(pids))
+        except (ValueError, TypeError):
+            pass
+    r = run(["smbstatus", "-p"])
+    for line in r.stdout.splitlines():
+        parts = line.split()
+        # "PID Username Group Machine Protocol …" → "1234 u_x org-y 10.67.0.5 (ipv4:10.67.0.5:51234) SMB3_11 …"
+        if len(parts) >= 4 and parts[0].isdigit() and parts[1] == username:
+            ip = parts[3].replace("ipv4:", "").split(":")[0]
+            if client_ip and ip != client_ip:
+                continue
+            pids.append(int(parts[0]))
+    return sorted(set(pids))
+
+
+def kill_sessions(username, client_ip=None):
+    """SIGTERM do procesów smbd tej sesji → klient traci połączenie i uchwyty natychmiast."""
+    n = 0
+    for pid in smb_sessions(username, client_ip):
+        try:
+            os.kill(pid, 15)
+            n += 1
+        except ProcessLookupError:
+            pass
+    if n:
+        log(f"sessions killed: {username} ip={client_ip or '*'} n={n}")
+    return n
+
+
+def revoke_user(org_id, username, kill, disable, client_ip):
+    """APP: POST /smb/user/<org>/<user>/revoke {kill_sessions, disable, client_ip}.
+    disable=False (domyślne APP): tylko zrywa sesje — konto nadal działa dla innych komputerów
+    tej osoby; o wydaniu hasła decyduje APP przy starcie sesji. disable=True: smbpasswd -d
+    (włączenie z powrotem = rotate po powrocie do smbAccounts / ręcznie smbpasswd -e)."""
+    grp = org_group(org_id)
+    if group_gid(grp) is None:
+        return 404, {"error": "org_not_provisioned"}
+    if not getent("passwd", username):
+        return 404, {"error": "user_not_found"}
+    if grp not in user_org_groups(username):
+        return 404, {"error": "user_not_in_org"}
+    n = kill_sessions(username, client_ip) if kill else 0
+    if disable:
+        run(["smbpasswd", "-d", username])
+        log(f"disabled: {username} (revoke)")
+    return 200, {"sessions_killed": n, "disabled": bool(disable)}
 
 
 # ── rekoncyliacja z manifestami ACL ───────────────────────────────
@@ -422,6 +493,29 @@ class Handler(BaseHTTPRequestHandler):
         self._send(404, {"error": "not_found"})
 
     def do_POST(self):
+        rv = re.match(r"^/smb/user/([^/]+)/([^/]+)/revoke$", self.path)
+        if rv:
+            if not self._authed():
+                return self._send(401, {"error": "unauthorized"})
+            org_id, username = rv.group(1), rv.group(2)
+            if not ORG_ID_RE.match(org_id) or username_kind(username) is None:
+                return self._send(400, {"error": "bad_params"})
+            try:
+                n = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(n)) if 0 < n <= 4096 else {}
+                client_ip = body.get("client_ip") or None
+                if client_ip and not re.match(r"^[0-9a-fA-F:.]{3,45}$", client_ip):
+                    return self._send(400, {"error": "bad_client_ip"})
+                with LOCK:
+                    code, resp = revoke_user(org_id, username,
+                                             bool(body.get("kill_sessions", True)),
+                                             bool(body.get("disable", False)), client_ip)
+                return self._send(code, resp)
+            except json.JSONDecodeError:
+                return self._send(400, {"error": "bad_json"})
+            except Exception as e:
+                log(f"ERROR REVOKE: {e}")
+                return self._send(500, {"error": "internal", "detail": str(e)[:200]})
         if self.path != "/smb/user":
             return self._send(404, {"error": "not_found"})
         if not self._authed():

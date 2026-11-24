@@ -23,3 +23,5 @@
    force group = org-__ORG_ID__
    create mask = 0600
    directory mask = 0700
+   # 2026-11-24 (Drive): Windows „Pliki offline” nie ma trzymać lokalnej kopii udziału
+   csc policy = disable
