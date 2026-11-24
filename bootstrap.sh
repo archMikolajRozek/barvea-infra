@@ -355,38 +355,40 @@ SQLEOF
 
   # ── Redis natywnie (prod: VM 101) — bind LAN, hasło → creds (REDIS_URL=redis://:<pw>@<ip>:6379)
   local RP; RP=$(gen 32); cred "REDIS_PASSWORD=$RP"
-  vm_ssh "$ip" "DEBIAN_FRONTEND=noninteractive apt-get install -y redis-server >/dev/null
-    sed -i -E 's/^bind .*/bind 127.0.0.1 $ip/; s/^# *requirepass .*/requirepass $RP/; s/^requirepass .*/requirepass $RP/' /etc/redis/redis.conf
-    grep -q '^requirepass ' /etc/redis/redis.conf || echo 'requirepass $RP' >> /etc/redis/redis.conf
+  # Sekrety do VM przez plik 0600 (scp), NIE przez argv ssh (ps/historia) — przegląd 2026-11-24.
+  local SEC=/tmp/.ds.$$; (umask 077; printf 'RP=%s\nMROOT=%s\nMPASS=%s\nMAK=%s\nMSK=%s\n' "$RP" "barvea_root" "$(gen 40)" "barvea_app_minio" "$(gen 40)" > "$SEC")
+  # shellcheck disable=SC1090
+  . "$SEC"; cred "MINIO_ROOT_USER=$MROOT MINIO_ROOT_PASSWORD=$MPASS"; cred "MINIO_ACCESS_KEY=$MAK MINIO_SECRET_KEY=$MSK"; cred "MINIO_ENDPOINT=$ip"
+  vm_put "$ip" "$SEC" /root/.barvea-data-secrets; rm -f "$SEC"
+  vm_ssh "$ip" "chmod 600 /root/.barvea-data-secrets; . /root/.barvea-data-secrets
+    DEBIAN_FRONTEND=noninteractive apt-get install -y redis-server >/dev/null
+    sed -i -E \"s/^bind .*/bind 127.0.0.1 $ip/; s/^# *requirepass .*/requirepass \$RP/; s/^requirepass .*/requirepass \$RP/\" /etc/redis/redis.conf
+    grep -q \"^requirepass \" /etc/redis/redis.conf || echo \"requirepass \$RP\" >> /etc/redis/redis.conf
     systemctl enable --now redis-server; systemctl restart redis-server"
 
   # ── MinIO natywnie (prod: binarka + minio.service na VM 101; korekta APP 2026-11-24: MinIO ZOSTAJE —
   #    IFC/podglądy/zdjęcia/raporty/QR/migawki; datad/ZFS = tylko dokumenty CDE). Dane: /mnt/minio-data
   #    (dysk systemowy VM 101 200G; większe instancje: osobny dysk → TODO scsi1 z kreatora).
   #    Pin wersji = prod (RELEASE.2025-09-07T16-13-09Z); air-gap: binarki minio/mc w ASSETS_DIR.
-  local MROOT MPASS MAK MSK; MROOT="barvea_root"; MPASS=$(gen 40); MAK="barvea_app_minio"; MSK=$(gen 40)
-  cred "MINIO_ROOT_USER=$MROOT MINIO_ROOT_PASSWORD=$MPASS"; cred "MINIO_ACCESS_KEY=$MAK MINIO_SECRET_KEY=$MSK"
   local MV="${MINIO_RELEASE:-RELEASE.2025-09-07T16-13-09Z}"
   local MB=/tmp/.minio.$$ MC=/tmp/.mc.$$
   fetch "https://dl.min.io/server/minio/release/linux-amd64/archive/minio.$MV" "$MB"
   fetch "https://dl.min.io/client/mc/release/linux-amd64/mc" "$MC"
   vm_put "$ip" "$MB" /usr/local/bin/minio; vm_put "$ip" "$MC" /usr/local/bin/mc; rm -f "$MB" "$MC"
   vm_put "$ip" "$REPO_DIR/proxmox/minio-policy-barvea-app.json" /tmp/minio-policy.json
-  vm_ssh "$ip" "chmod 755 /usr/local/bin/minio /usr/local/bin/mc
+  # MinIO: TLS off — tylko LAN gości (jak prod); sekrety z /root/.barvea-data-secrets (plik, nie argv).
+  vm_ssh "$ip" ". /root/.barvea-data-secrets; chmod 755 /usr/local/bin/minio /usr/local/bin/mc
     id minio-user >/dev/null 2>&1 || useradd -r -M -s /usr/sbin/nologin minio-user
     mkdir -p /mnt/minio-data /etc/minio && chown minio-user: /mnt/minio-data
-    printf 'MINIO_ROOT_USER=%s\nMINIO_ROOT_PASSWORD=%s\nMINIO_VOLUMES=/mnt/minio-data\nMINIO_OPTS=--address $ip:9000 --console-address 127.0.0.1:9001\n' '$MROOT' '$MPASS' > /etc/minio/minio.conf
+    printf \"MINIO_ROOT_USER=%s\\nMINIO_ROOT_PASSWORD=%s\\nMINIO_VOLUMES=/mnt/minio-data\\nMINIO_OPTS=--address $ip:9000 --console-address 127.0.0.1:9001\\n\" \"\$MROOT\" \"\$MPASS\" > /etc/minio/minio.conf
     chmod 600 /etc/minio/minio.conf
-    printf '[Unit]\nDescription=MinIO\nAfter=network-online.target\n[Service]\nUser=minio-user\nGroup=minio-user\nEnvironmentFile=/etc/minio/minio.conf\nExecStart=/usr/local/bin/minio server \$MINIO_OPTS \$MINIO_VOLUMES\nRestart=always\nLimitNOFILE=65536\n[Install]\nWantedBy=multi-user.target\n' > /etc/systemd/system/minio.service
+    printf \"[Unit]\\nDescription=MinIO\\nAfter=network-online.target\\n[Service]\\nUser=minio-user\\nGroup=minio-user\\nEnvironmentFile=/etc/minio/minio.conf\\nExecStart=/usr/local/bin/minio server \\\$MINIO_OPTS \\\$MINIO_VOLUMES\\nRestart=always\\nLimitNOFILE=65536\\n[Install]\\nWantedBy=multi-user.target\\n\" > /etc/systemd/system/minio.service
     systemctl daemon-reload; systemctl enable --now minio; sleep 3
-    mc alias set local http://$ip:9000 '$MROOT' '$MPASS' >/dev/null
-    mc admin policy create local barvea-app-policy /tmp/minio-policy.json >/dev/null 2>&1 || true
-    mc admin user add local '$MAK' '$MSK' >/dev/null 2>&1 || true
-    mc admin policy attach local barvea-app-policy --user '$MAK' >/dev/null 2>&1 || true
-    for b in barvea-assets barvea-docs barvea-ifc barvea-qr barvea-reports; do mc mb -p local/\$b >/dev/null 2>&1 || true; done
-    rm -f /tmp/minio-policy.json"
-  # creds: MINIO_ENDPOINT=$ip MINIO_PORT=9000 MINIO_USE_SSL=false (deploy-app wpisuje z creds)
-  cred "MINIO_ENDPOINT=$ip"
+    MC_HOST_local=http://\$MROOT:\$MPASS@$ip:9000 mc admin policy create local barvea-app-policy /tmp/minio-policy.json >/dev/null 2>&1 || true
+    MC_HOST_local=http://\$MROOT:\$MPASS@$ip:9000 mc admin user add local \"\$MAK\" \"\$MSK\" >/dev/null 2>&1 || true
+    MC_HOST_local=http://\$MROOT:\$MPASS@$ip:9000 mc admin policy attach local barvea-app-policy --user \"\$MAK\" >/dev/null 2>&1 || true
+    for b in barvea-assets barvea-docs barvea-ifc barvea-qr barvea-reports; do MC_HOST_local=http://\$MROOT:\$MPASS@$ip:9000 mc mb -p local/\$b >/dev/null 2>&1 || true; done
+    rm -f /tmp/minio-policy.json /root/.barvea-data-secrets"
 }
 
 svc_vault() {  # LXC 200 — Vault (init/unseal = RĘCZNA ceremonia po bootstrapie)
@@ -433,11 +435,12 @@ PYEOF
       for f in root-ca.crt internal.crt internal.key; do vm_put "${LAN}.30" "$VO/$f" "/etc/ssl/barvea/$f"; done
       vm_ssh "${LAN}.30" "chmod 644 /etc/ssl/barvea/*.crt; chmod 600 /etc/ssl/barvea/internal.key"
       cred "VAULT_APPROLE_ROLE_ID=$(cat "$VO/barvea-app.role_id" 2>/dev/null) VAULT_APPROLE_SECRET_ID=$(cat "$VO/barvea-app.secret_id" 2>/dev/null)"
-      cred "STORAGE_APPROLE_ROLE_ID=$(cat "$VO/barvea-storage.role_id" 2>/dev/null) STORAGE_APPROLE_SECRET_ID=$(cat "$VO/barvea-storage.secret_id" 2>/dev/null)"
+      cred "STORAGE_APPROLE_ROLE_ID=$(cat "$VO/barvea-storage.role_id" 2>/dev/null) (secret_id TYLKO w /etc/vault/storage-approle na hoście)"
       # AppRole storage: HOST (zfs-load-org.sh: VAULT_ROLE_ID/VAULT_SECRET_ID) + kopia do LXC 201 (/etc/vault)
       mkdir -p /etc/vault /etc/barvea
       printf 'VAULT_ROLE_ID=%s\nVAULT_SECRET_ID=%s\n' "$(cat "$VO/barvea-storage.role_id" 2>/dev/null)" "$(cat "$VO/barvea-storage.secret_id" 2>/dev/null)" > /etc/vault/storage-approle && chmod 600 /etc/vault/storage-approle
-      pct push 201 /etc/vault/storage-approle /etc/vault/storage-approle --perms 600 2>/dev/null || true
+      # (przegląd 2026-11-24) AppRole z transit/decrypt per-org-keys ZOSTAJE TYLKO na hoście (zfs-load-org.sh);
+      # LXC 201 go nie dostaje — gdyby datad/org-provision potrzebował Vaulta, osobna rola bez decrypt.
       # zfs-load-org.sh: pula orgów + adres Vaulta z konfiguracji (nie hardcode hddpool/10.10.0.50)
       printf 'ORGS_DS=%s/orgs\nVADDR=https://%s.50:8200\n' "$ORGS_POOL" "$LAN" > /etc/barvea/zfs-load-org.conf
       pct exec 200 -- rm -f /root/vault-out/barvea-app.secret_id /root/vault-out/barvea-storage.secret_id
