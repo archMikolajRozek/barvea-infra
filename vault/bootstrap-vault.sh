@@ -111,6 +111,9 @@ path "transit/verify/*"  { capabilities = ["update"] }
 path "transit/hmac/*"    { capabilities = ["update"] }
 path "transit/encrypt/*" { capabilities = ["update"] }
 path "transit/decrypt/*" { capabilities = ["update"] }
+# 2026-11-24: klucz publiczny do podpisu paczek (sign-release-manifest.ts: PEM + samoweryfikacja).
+# Tylko odczyt metadanych tego jednego klucza (public_key); bez export, bez innych kluczy.
+path "transit/keys/update-manifest-ed25519" { capabilities = ["read"] }
 EOF
 
 vault policy write barvea-storage - <<'EOF'
