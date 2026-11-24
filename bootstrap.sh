@@ -377,17 +377,20 @@ svc_storage() { # LXC 201 — Samba + datad + smb-provisiond + acl-sync
   done
   pct push 201 "$REPO_DIR/storage/barvea-datad.service"      /etc/systemd/system/barvea-datad.service
   pct push 201 "$REPO_DIR/storage/smb-provisiond.service"    /etc/systemd/system/smb-provisiond.service
+  # v2 (S1 2026-11): rekoncyliacja kont SMB per org z manifestami ACL — raz dziennie
+  pct push 201 "$REPO_DIR/storage/systemd/smb-reconcile.service" /etc/systemd/system/smb-reconcile.service
+  pct push 201 "$REPO_DIR/storage/systemd/smb-reconcile.timer"   /etc/systemd/system/smb-reconcile.timer
   pct push 201 "$REPO_DIR/storage/systemd/barvea-acl-sync.service" /etc/systemd/system/barvea-acl-sync.service
   pct push 201 "$REPO_DIR/storage/systemd/barvea-acl-sync.timer"   /etc/systemd/system/barvea-acl-sync.timer
   local DT ST AT; DT=$(gen); ST=$(gen); AT=$(gen)
   cred "DRIVE_DATA_TOKEN=$DT"; cred "SMB_PROVISIOND_TOKEN=$ST"; cred "DRIVE_ACL_SERVICE_TOKEN=$AT"
   pct exec 201 -- bash -c "
     printf 'TOKEN=$DT\nBIND=${LAN}.40\nPORT=8723\nSIGN_KEY=%s\n' \"\$(tr -dc A-Za-z0-9 </dev/urandom | head -c 64)\" > /etc/barvea/barvea-datad.env
-    printf 'TOKEN=$ST\nBIND=${LAN}.40\nPORT=8722\nUID_START=5100\n' > /etc/barvea/smb-provisiond.env
+    printf 'TOKEN=$ST\nBIND=${LAN}.40\nPORT=8722\nUID_START=5100\nLEGACY_ACCOUNTS=0\nRECONCILE_DELETE_DAYS=30\n' > /etc/barvea/smb-provisiond.env
     printf 'DRIVE_ACL_SERVICE_TOKEN=$AT\nORG_SLUGS=\nAPP_URL=https://app.barvea.internal\nCA_FILE=/etc/barvea/root-ca.crt\n' > /etc/barvea/acl-sync.env
     chmod 600 /etc/barvea/*.env
     systemctl daemon-reload
-    systemctl enable --now smbd barvea-datad smb-provisiond barvea-acl-sync.timer"
+    systemctl enable --now smbd barvea-datad smb-provisiond barvea-acl-sync.timer smb-reconcile.timer"
   echo "ℹ️  root-ca.crt do /etc/barvea/ w LXC 201 — po ceremonii Vaulta (z bootstrap-vault OUT_DIR)."
   echo "ℹ️  Nowy org: przepis proxmox/zfs-layout.md + storage/samba/per-org.conf.template."
 }

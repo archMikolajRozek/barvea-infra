@@ -1,0 +1,8 @@
+[Unit]
+Description=BARVEA SMB accounts reconcile (konta per org vs manifesty ACL)
+After=network-online.target smbd.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/sbin/smb-provisiond.py --reconcile
+# Wymaga /etc/barvea/smb-provisiond.env (TOKEN, LEGACY_ACCOUNTS, RECONCILE_DELETE_DAYS).

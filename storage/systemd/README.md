@@ -7,13 +7,14 @@ Wszystkie service/timer instancji. Docelowo `bootstrap.sh` kopiuje je do
 |---|---|---|
 | `barvea-datad.service` (../barvea-datad.service) | LXC 201 storage | CDE data-plane :8723 (files/promote/fs-journal/fs-tree/dl/lock/rename) + full_audit→journal thread |
 | `smb-provisiond.service` (../smb-provisiond.service) | LXC 201 storage | SMB user provisioning :8722 |
+| `smb-reconcile.{service,timer}` | LXC 201 storage | v2 (S1): konta SMB per org vs manifesty ACL, codziennie 04:50 (smbpasswd -d → po 30 dniach userdel) |
 | `barvea-acl-sync.service` + `.timer` | LXC 201 storage | ACL manifest→POSIX ACL puller (timer 60s) |
 | `../../wg-control/wg-provisiond.service` | barvea-infra VM | WG peer control-plane :8721 |
 | restic backup timers (3 VM) | 100/101/102 | nightly → Hetzner Storage Box (patrz [[project_barvea_backup_setup]]) — DO wyeksportowania |
 
 ## Config zależności (env/pliki na maszynie, NIE w git — sekrety):
 - `/etc/barvea/barvea-datad.env` (TOKEN, SIGN_KEY, PUBLIC_DL_BASE, DL_TTL)
-- `/etc/barvea/smb-provisiond.env` (TOKEN, UID_START)
+- `/etc/barvea/smb-provisiond.env` (TOKEN, UID_START, LEGACY_ACCOUNTS=1 do końca migracji S1 / 0 w świeżej instancji, RECONCILE_DELETE_DAYS)
 - `/etc/barvea/wg-provisiond.env` (TOKEN, BIND, WG_IFACE, WG_CONF)
 - `/etc/barvea/acl-sync.env` (DRIVE_ACL_SERVICE_TOKEN, ORG_SLUGS, APP_URL, CA_FILE)
 - `/etc/barvea/root-ca.crt` (z Vault pki/ca/pem)
