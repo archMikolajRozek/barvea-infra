@@ -41,6 +41,19 @@ WG0_CIDR="${WG0_CIDR:-10.9.0.0/24}"
 WG0_ADDR="${WG0_ADDR:-10.9.0.1/24}"
 WG0_PORT="${WG0_PORT:-51820}"
 ASSETS_DIR="${ASSETS_DIR:-}"              # air-gap: katalog artefaktów
+# ── wizard v2 (2026-11-24, INSTALATOR-PLAN §D2/D3): pule, hosty, moduły, rozmiary ──
+BULK_DISKS="${BULK_DISKS:-}"              # druga pula (HDD) na dane org; pusta = orgs na POOL_NAME
+BULK_RAID="${BULK_RAID:-mirror}"
+BULK_POOL_NAME="${BULK_POOL_NAME:-bulk}"
+ORGS_POOL="$POOL_NAME"; [ -n "$BULK_DISKS" ] && ORGS_POOL="$BULK_POOL_NAME"   # gdzie żyje <pool>/orgs
+INTERNAL_DOMAIN="${INTERNAL_DOMAIN:-barvea.internal}"
+APP_HOST="${APP_HOST:-app.$INTERNAL_DOMAIN}"; DRIVE_HOST="${DRIVE_HOST:-drive.$INTERNAL_DOMAIN}"; ADMIN_HOST="${ADMIN_HOST:-admin.$INTERNAL_DOMAIN}"
+PUBLIC_FQDN="${PUBLIC_FQDN:-}"
+MOD_DRIVE="${MOD_DRIVE:-1}"; MOD_AV="${MOD_AV:-1}"; MOD_COLLAB="${MOD_COLLAB:-1}"; MOD_POINTCLOUD="${MOD_POINTCLOUD:-0}"; MOD_IFC="${MOD_IFC:-1}"
+COMPOSE_PROFILES="${COMPOSE_PROFILES:-}"
+VM102_CORES="${VM102_CORES:-8}"; VM102_MEM_MB="${VM102_MEM_MB:-32768}"; LXC201_MEM_MB="${LXC201_MEM_MB:-16384}"
+VAULT_KEYS="${VAULT_KEYS:-file}"          # file = auto init → /root/barvea-vault-keys.json; split = ceremonia ręczna
+BACKUP_TARGET="${BACKUP_TARGET:-skip}"; BACKUP_SFTP="${BACKUP_SFTP:-}"
 LXC_TEMPLATE="${LXC_TEMPLATE:-debian-13-standard}"   # pveam nazwa-prefix
 CLOUD_IMG_URL="${CLOUD_IMG_URL:-https://cloud.debian.org/images/cloud/trixie/latest/debian-13-genericcloud-amd64.qcow2}"
 CI_USER="${CI_USER:-miko}"
@@ -65,11 +78,12 @@ elif [ "$PRESET" = staging ]; then  # małe goście — test/staging (VM-w-VM,
                "102 barvea-app   ${LAN}.30 2 3072 -    30 app   3" )
   UPLOAD_TMP_GB=20
 else
+  # rozmiary VM 102 / LXC 201 z kreatora (moduły → RAM); defaulty = prod 2026-11 (8c/32G, 16G)
   GUESTS_LXC=( "200 vault    ${LAN}.50 2 2048 - 8  vault"
-               "201 storage  ${LAN}.40 4 16384 - 16 storage" )   # 16G: Samba+datad+clamd (sygnatury ~1.5G), host ma zapas
+               "201 storage  ${LAN}.40 4 $LXC201_MEM_MB - 16 storage" )   # 16G z clamd (sygnatury ~1.5G), 8G bez AV
   GUESTS_VM=(  "100 barvea-infra ${LAN}.10 2 4096  -    50  infra 1"
                "101 barvea-data  ${LAN}.20 4 24576 8192 200 data  2"
-               "102 barvea-app   ${LAN}.30 8 24576 -    80  app   3" )   # 8c/24G od 2026-11-19 (suma mem_limit sidecarow 19G + appka); bez balloona (OOM 2026-09-05)
+               "102 barvea-app   ${LAN}.30 $VM102_CORES $VM102_MEM_MB -    80  app   3" )   # bez balloona (OOM 2026-09-05)
   UPLOAD_TMP_GB=1000
 fi
 
@@ -104,7 +118,8 @@ phase_preflight() {
            network/wg0.conf.template storage/samba/smb.conf.global.template \
            storage/samba/per-org.conf.template storage/barvea-datad.py \
            storage/smb-provisiond.py storage/barvea-acl-sync.py \
-           wg-control/wg-provisiond.py backup/barvea-host-backup.sh; do
+           wg-control/wg-provisiond.py backup/barvea-host-backup.sh \
+           Caddyfile.dedicated.template network/dnsmasq-wg-users.conf storage/systemd/smb-reconcile.timer; do
       [ -f "$REPO_DIR/$f" ] || die "brak $f w repo ($REPO_DIR)"
   done
   if ! zpool list "$POOL_NAME" >/dev/null 2>&1; then
@@ -128,8 +143,15 @@ phase_host() {
       zpool create -o ashift=12 "$POOL_NAME" "$POOL_RAID" $POOL_DISKS
   fi
   zfs set compression=lz4 atime=off xattr=sa acltype=posix "$POOL_NAME"
-  zfs list "$POOL_NAME/orgs" >/dev/null 2>&1 || zfs create "$POOL_NAME/orgs"
-  zfs set compression=zstd "$POOL_NAME/orgs"
+  # Druga pula BULK (HDD) na dane organizacji — decyzja Miko 2026-11-19: fast/bulk;
+  # jeden nośnik = jedna pula (ORGS_POOL = POOL_NAME).
+  if [ -n "$BULK_DISKS" ] && ! zpool list "$BULK_POOL_NAME" >/dev/null 2>&1; then
+      # shellcheck disable=SC2086
+      zpool create -o ashift=12 "$BULK_POOL_NAME" "$BULK_RAID" $BULK_DISKS
+      zfs set compression=lz4 atime=off xattr=sa acltype=posix "$BULK_POOL_NAME"
+  fi
+  zfs list "$ORGS_POOL/orgs" >/dev/null 2>&1 || zfs create "$ORGS_POOL/orgs"
+  zfs set compression=zstd "$ORGS_POOL/orgs"
   # sparse=1 (thin): zvole bez refreservation — inaczej suma dysków gości
   # musi zmieścić się w poolu Z GÓRY (run1 staging: resize 101 padł na
   # mirror 60G). Trade: pilnować zapełnienia poola (zfs list).
@@ -424,7 +446,20 @@ svc_app() {    # VM 102 — docker + szkielet; DEPLOY APLIKACJI = bundle/deploy.
   vm_put "$ip" "$REPO_DIR/vm102/systemd/docker-prune.service" /etc/systemd/system/docker-prune.service
   vm_put "$ip" "$REPO_DIR/vm102/systemd/docker-prune.timer"   /etc/systemd/system/docker-prune.timer
   vm_ssh "$ip" "systemctl daemon-reload && systemctl enable --now docker-prune.timer"
-  vm_put "$ip" "$REPO_DIR/Caddyfile" "/home/$CI_USER/barvea/Caddyfile"
+  # Caddyfile: dedyk/staging = szablon bez Cloudflare (hosty *.barvea.internal, internal-CA,
+  # admin host); saas = prod Caddyfile 1:1. Cert internal.{crt,key} wystawia svc_vault (pki_int).
+  if [ "$DEPLOYMENT_MODE" = dedicated ] || [ "$PRESET" = staging ]; then
+      sed -e "s|__APP_HOST__|$APP_HOST|g" -e "s|__ADMIN_HOST__|$ADMIN_HOST|g" \
+          -e "s|__STORAGE_IP__|${LAN}.40|g" \
+          -e "s|__MTLS_PROOF_LINE__|header_up X-Barvea-Mtls-Proof {env.MTLS_PROXY_SECRET}|" \
+          "$REPO_DIR/Caddyfile.dedicated.template" > /tmp/.caddy.$$
+      vm_put "$ip" /tmp/.caddy.$$ "/home/$CI_USER/barvea/Caddyfile"; rm -f /tmp/.caddy.$$
+  else
+      vm_put "$ip" "$REPO_DIR/Caddyfile" "/home/$CI_USER/barvea/Caddyfile"
+  fi
+  vm_ssh "$ip" "mkdir -p /etc/ssl/barvea && chmod 755 /etc/ssl/barvea"
+  # Compose ≥ 2.20 (depends_on required:false w compose dedyka APP)
+  vm_ssh "$ip" "v=\$(docker compose version --short 2>/dev/null || echo 0); printf '%s\n' \"\$v\" 2.20 | sort -V | head -1 | grep -qx 2.20 || echo '⚠️  docker compose < 2.20 (jest '\$v') — compose dedyka wymaga 2.20+'"
   vm_put "$ip" "$REPO_DIR/docker-compose.yml" "/home/$CI_USER/barvea/docker-compose.yml"
   echo "ℹ️  APLIKACJA: wgraj release-bundle (albo git clone app) + .env.production"
   echo "   (DATABASE_URL z creds: barvea_app@${LAN}.20/barvea) → scripts/deploy.sh. Poza bootstrapem."
@@ -449,12 +484,15 @@ phase_verify() {
   log "VERIFY"
   pct list; qm list
   for p in "${LAN}.50:8200 Vault" "${LAN}.40:445 Samba" "${LAN}.40:8723 datad" \
-           "${LAN}.40:8722 smb-prov" "${LAN}.20:5432 Postgres"; do
+           "${LAN}.40:8722 smb-prov" "${LAN}.40:3310 clamd" "${LAN}.20:5432 Postgres" \
+           "${LAN}.20:6379 Redis" "${LAN}.20:9000 MinIO" "${LAN}.10:8721 wg-prov"; do
       # shellcheck disable=SC2086
       set -- ${p/:/ }; local hostport="$1" name="${2:-}"
       timeout 3 bash -c "echo > /dev/tcp/${hostport/:/\/}" 2>/dev/null \
           && echo "  ✓ $p" || echo "  ✗ $p (sprawdź — Vault sealed? app niewdrożona?)"
   done
+  # DNS tunelu: dnsmasq na hubie odpowiada tylko na wg-users — test z hosta przez VM 100
+  vm_ssh "${LAN}.10" "getent hosts $APP_HOST >/dev/null 2>&1 || dig +short @${WG_USERS_ADDR%/*} $APP_HOST 2>/dev/null | grep -q . && echo '  ✓ dnsmasq: $APP_HOST' || echo '  ✗ dnsmasq: $APP_HOST (sprawdź /etc/dnsmasq.d/wg-users.conf)'" || true
   cat <<NEXT
 
   ═══ BOOTSTRAP KONIEC — kroki ręczne (kolejność!): ═══

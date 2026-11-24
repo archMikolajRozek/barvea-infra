@@ -1,0 +1,224 @@
+# ═══════════════════════════════════════════════════════════════
+# BARVEA — Caddyfile dla instancji DEDYK (bootstrap.sh v2 → ~/barvea/Caddyfile na VM 102).
+# Placeholdery: __APP_HOST__ __ADMIN_HOST__ __STORAGE_IP__ __MTLS_PROOF_LINE__
+# Różnice wobec prod (Caddyfile): BEZ Cloudflare (trusted_proxies, client_ip_headers —
+# client_ip = adres TCP z tunelu/LAN), BEZ publicznego vhosta (dochodzi osobno, gdy
+# PUBLIC_FQDN), TLS z internal-CA (Vault pki_int: /etc/ssl/barvea/internal.{crt,key},
+# SAN = app + admin host). Trasy, limity i nagłówki 1:1 z prod (KEEP-IN-SYNC z Caddyfile).
+# ═══════════════════════════════════════════════════════════════
+{
+    admin off
+    servers {
+        protocols h1 h2 h3
+    }
+}
+
+(barvea_app_headers) {
+    header_up X-Real-IP {client_ip}
+    header_up X-Forwarded-For {remote_host}
+    header_up X-Forwarded-Proto {scheme}
+    header_up Host {host}
+}
+
+(barvea_no_mtls) {
+    header_up -X-Client-Cert-Subject
+    header_up -X-Client-Cert-Issuer
+    header_up -X-Client-Cert-Serial
+    header_up -X-Barvea-Mtls-Proof
+}
+
+# ─── Aplikacja (WG/LAN, mTLS dla Drive: mode request) ───
+https://__APP_HOST__ {
+    tls /etc/ssl/barvea/internal.crt /etc/ssl/barvea/internal.key {
+        client_auth {
+            mode request
+            trusted_ca_cert_file /etc/ssl/barvea/root-ca.crt
+        }
+    }
+    encode zstd gzip
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        Permissions-Policy "camera=(), microphone=(), geolocation=(self), payment=(self)"
+        Cross-Origin-Opener-Policy "same-origin"
+        -Server
+        -X-Powered-By
+    }
+
+    # Wewnętrzne API współedycji — nigdy z zewnątrz (collab woła app po sieci docker).
+    @collabInternal path /api/v1/internal /api/v1/internal/*
+    respond @collabInternal 404
+
+    # Współedycja (WebSocket) — w dedyku na tym samym hoście co appka.
+    @collab path /_collab /_collab/*
+    handle @collab {
+        reverse_proxy collab:1234 {
+            header_up X-Real-IP {client_ip}
+            stream_close_delay 5m
+        }
+    }
+
+    # Podpisane pobrania z datad (storage) — token HMAC samowystarczalny.
+    handle /dl/* {
+        reverse_proxy __STORAGE_IP__:8723 {
+            flush_interval -1
+            transport http {
+                read_timeout 1800s
+                write_timeout 1800s
+                dial_timeout 10s
+            }
+        }
+    }
+
+    # Duże pobierania strumieniowe (modele 3D, dokumenty, zdjęcia, plik IFC dla podglądu).
+    @stream path /api/v1/mobile/projects/*/models/*/fragments /api/v1/orgs/*/projects/*/documents/*/download /api/v1/orgs/*/projects/*/documents/*/preview /api/v1/orgs/*/projects/*/bim-issues/*/attachments /api/v1/orgs/*/projects/*/bim-issues/*/attachments/* /api/v1/orgs/*/projects/*/daily-log/*/photos /api/v1/orgs/*/projects/*/daily-log/*/photos/* /api/v1/orgs/*/projects/*/deliveries/*/photos /api/v1/orgs/*/projects/*/deliveries/*/photos/* /api/v1/orgs/*/projects/*/work-orders/*/photos /api/v1/orgs/*/projects/*/work-orders/*/photos/* /api/v1/orgs/*/projects/*/ifc/*/file
+    handle @stream {
+        reverse_proxy app:3005 {
+            flush_interval -1
+            import barvea_app_headers
+            import barvea_no_mtls
+            transport http {
+                read_timeout 1800s
+                write_timeout 1800s
+                dial_timeout 10s
+            }
+        }
+    }
+
+    # Plugin: dane uzupełniające OUT-53 (części gzip ≤ 16 MiB).
+    @pluginAnalytics path /api/v1/plugin/projects/*/element-analytics/init /api/v1/plugin/projects/*/element-analytics/*/parts/*
+    handle @pluginAnalytics {
+        request_body {
+            max_size 17MB
+        }
+        reverse_proxy app:3005 {
+            import barvea_app_headers
+            import barvea_no_mtls
+            transport http {
+                read_timeout 600s
+                write_timeout 600s
+                dial_timeout 10s
+            }
+        }
+    }
+
+    # Długie operacje serwera (finalizacja uploadu kawałkowego, build tomu PDF).
+    @longops path /api/v1/orgs/*/projects/*/documents/uploads/*/complete /api/v1/orgs/*/projects/*/volumes/*/build
+    handle @longops {
+        request_body {
+            max_size 10MB
+        }
+        reverse_proxy app:3005 {
+            import barvea_app_headers
+            import barvea_no_mtls
+            transport http {
+                read_timeout 7200s
+                write_timeout 7200s
+                dial_timeout 30s
+            }
+        }
+    }
+
+    # Duże uploady (single-POST ≤ 1 GB; kawałki ≤ 64 MB).
+    @uploads path /api/v1/orgs/*/projects/*/documents /api/v1/orgs/*/projects/*/documents/* /api/v1/orgs/*/projects/*/documents/uploads/* /api/v1/orgs/*/projects/*/ifc /api/v1/orgs/*/projects/*/ifc/* /api/v1/orgs/*/projects/*/assets/*/documents /api/v1/orgs/*/projects/*/combined-models* /api/v1/plugin/projects/*/cde/upload /api/v1/plugin/projects/*/ifc-upload
+    handle @uploads {
+        request_body {
+            max_size 1GB
+        }
+        reverse_proxy app:3005 {
+            import barvea_app_headers
+            import barvea_no_mtls
+            transport http {
+                read_timeout 600s
+                write_timeout 600s
+                dial_timeout 30s
+            }
+        }
+    }
+
+    handle /api/health {
+        reverse_proxy app:3005 {
+            header_up X-Real-IP {client_ip}
+            import barvea_no_mtls
+            transport http {
+                read_timeout 10s
+            }
+        }
+    }
+
+    # Reszta — tu Caddy SAM ustawia tożsamość mTLS z TLS + dowód dla appki.
+    handle {
+        @nextStatic path /_next/static/*
+        header @nextStatic Cache-Control "public, max-age=31536000, immutable"
+        reverse_proxy app:3005 {
+            import barvea_app_headers
+            header_up X-Client-Cert-Subject {tls_client_subject}
+            header_up X-Client-Cert-Issuer {tls_client_issuer}
+            header_up X-Client-Cert-Serial {tls_client_serial}
+            __MTLS_PROOF_LINE__
+            transport http {
+                read_timeout 120s
+                write_timeout 120s
+                dial_timeout 10s
+            }
+        }
+    }
+
+    log {
+        output file /data/access.log {
+            roll_size 100MiB
+            roll_keep 14
+            roll_keep_for 720h
+        }
+        format json
+        level INFO
+    }
+}
+
+# ─── Panel administratora (osobny host, osobna sesja, 2FA zawsze; ADMIN_HOST w env) ───
+https://__ADMIN_HOST__ {
+    tls /etc/ssl/barvea/internal.crt /etc/ssl/barvea/internal.key
+    encode zstd gzip
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()"
+        Cross-Origin-Opener-Policy "same-origin"
+        -Server
+        -X-Powered-By
+    }
+    @adminAllowed path / /admin /admin/* /api/v1/admin/* /login /login/* /2fa /2fa/* /blocked /blocked/* /api/auth/* /api/v1/auth/2fa/* /api/v1/auth/clear-site-data /api/v1/public/* /api/v1/me /api/v1/me/* /api/v1/csp-report /api/v1/errors /api/health /_next/* /favicon* /barvea-mark.svg /icon-192.png /icon-512.png /manifest.json /fonts/* /build-info.json
+    handle @adminAllowed {
+        request_body {
+            max_size 20MB
+        }
+        reverse_proxy app:3005 {
+            import barvea_app_headers
+            import barvea_no_mtls
+            transport http {
+                read_timeout 120s
+                write_timeout 120s
+                dial_timeout 10s
+            }
+        }
+    }
+    handle {
+        @pageGet {
+            method GET
+            not path /api/*
+        }
+        redir @pageGet https://__APP_HOST__{uri} 302
+        respond 404
+    }
+    log {
+        output file /data/admin-access.log {
+            roll_size 50MiB
+            roll_keep 14
+            roll_keep_for 720h
+        }
+        format json
+        level INFO
+    }
+}
