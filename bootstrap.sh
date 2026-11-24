@@ -574,14 +574,16 @@ phase_verify() {
   done
   # DNS tunelu: dnsmasq na hubie odpowiada tylko na wg-users — test z hosta przez VM 100
   vm_ssh "${LAN}.10" "getent hosts $APP_HOST >/dev/null 2>&1 || dig +short @${WG_USERS_ADDR%/*} $APP_HOST 2>/dev/null | grep -q . && echo '  ✓ dnsmasq: $APP_HOST' || echo '  ✗ dnsmasq: $APP_HOST (sprawdź /etc/dnsmasq.d/wg-users.conf)'" || true
+  if [ "$BACKUP_TARGET" != skip ] && [ -n "$BACKUP_SFTP" ] && [ "$PRESET" != compact ]; then
+      log "BACKUP: backup-enable.sh → $BACKUP_SFTP (interaktywnie: klucze do authorized_keys celu)"
+      "$REPO_DIR/backup-enable.sh" "$BACKUP_SFTP" || echo "⚠️ backup-enable.sh nieudany — powtórz ręcznie: ./backup-enable.sh $BACKUP_SFTP"
+  fi
   cat <<NEXT
 
   ═══ BOOTSTRAP KONIEC — kroki ręczne (kolejność!): ═══
-  1. Ceremonia Vaulta (ramka wyżej) → bootstrap-vault.sh → root-ca.crt
-     → /etc/barvea/root-ca.crt na LXC 201 (+ Caddy internal cert na 102)
+  1. Vault: $([ "$VAULT_KEYS" = file ] && echo "ZROBIONE automatycznie — ZABIERZ /root/barvea-vault-keys.json z LXC 200 poza serwer i usuń go tam" || echo "ceremonia ręczna (ramka wyżej) → bootstrap-vault.sh → root-ca.crt na LXC 201 + internal cert na 102")
   2. App: bundle/git + .env.production (creds: $CREDS) → deploy.sh
-  3. Backup off-site: backup/README.md (klucz→Storage Box, hasło repo)
-     + install barvea-host-backup.sh + timer
+  3. Backup off-site: $([ "$BACKUP_TARGET" = skip ] && echo "POMINIĘTY w kreatorze → ./backup-enable.sh user@host:/sciezka (kiedykolwiek, bez reinstalacji)" || echo "włączony przez backup-enable.sh (patrz wyżej) — sprawdź restic snapshots")
   4. Pierwszy org: proxmox/zfs-layout.md (dataset+.ct+mpN+share+ORG_SLUGS)
   5. WG peery: enroll przez APP (wg-provisiond) / admin wg0 ręcznie
   Creds wygenerowane: $CREDS (0600) — przenieś do managera haseł i USUŃ.
