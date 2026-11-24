@@ -19,6 +19,7 @@
 #     → 400 bad_org_id | bad_smb_username | username_org_mismatch | legacy_disabled
 #     → 404 org_not_provisioned (brak /srv/orgs/<org_id> lub grupy org-<id>)
 #     → 409 account_belongs_to_other_org (konto per org istnieje w innej grupie — nigdy nie dopisujemy)
+#     → 409 account_disabled (konto wyłączone przez rekoncyliację — rotate go nie włącza)
 #   DELETE /smb/user/<org_id>/<username> → 200 / 404
 #   GET /healthz → {ok:true, version:2}
 #
@@ -179,6 +180,11 @@ def provision_user(org_id, username, rotate):
 
     if getent("passwd", username):
         uid = user_uid(username)
+        if username in _load_disabled():
+            # Wyłączone przez rekoncyliację (poza smbAccounts manifestu) — rotate NIE może
+            # go włączyć; włącza tylko powrót do manifestu (reconcile → smbpasswd -e).
+            return 409, {"error": "account_disabled",
+                         "detail": "konto wyłączone przez rekoncyliację (poza manifestem ACL)"}
         if kind == "v2":
             # Konto per org: dokładnie jedna grupa org. Inna grupa = cudze konto.
             if user_gid(username) != gid or grp not in user_groups(username):
