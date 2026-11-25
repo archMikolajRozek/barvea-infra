@@ -12,9 +12,11 @@ ORGS_DS="hddpool/orgs"
 # bootstrap v2 (2026-11-24): pula orgów i adres Vaulta z konfiguracji (dedyk: pula bulk, inny LAN)
 [ -f /etc/barvea/zfs-load-org.conf ] && . /etc/barvea/zfs-load-org.conf
 . /etc/vault/storage-approle
-# (2026-11-25) TLS Vaulta: --cacert z przypiętym certem listenera (VAULT_CACERT z conf), bez pliku = -k jak dotąd;
-# AppRole JSON przez stdin, nie argv. Prod: wgrać ten plik + /etc/barvea/vault-tls.crt (pct pull 200 /opt/vault/tls/tls.crt).
-if [ -n "${VAULT_CACERT:-}" ] && [ -f "$VAULT_CACERT" ]; then CURL_TLS=(--cacert "$VAULT_CACERT"); else CURL_TLS=(-k); fi
+# (2026-11-25) TLS Vaulta: PRZYPIĘCIE KLUCZA PUBLICZNEGO listenera (--pinnedpubkey z certu VAULT_CACERT) —
+# cert Vaulta to self-signed CN=Vault bez IP w SAN, więc --cacert odpada (name mismatch); pin działa z nim i z certem
+# z pki_int. Rotacja certu Vaulta = pct pull 200 /opt/vault/tls/tls.crt /etc/barvea/vault-tls.crt. Bez pliku = -k jak dotąd.
+# AppRole JSON przez stdin, nie argv. PROD: wgrane 25.11 (sed na żywym pliku, kopia .bak-20261125).
+if [ -n "${VAULT_CACERT:-}" ] && [ -f "$VAULT_CACERT" ]; then PIN=$(openssl x509 -in "$VAULT_CACERT" -pubkey -noout | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | base64); CURL_TLS=(-k --pinnedpubkey "sha256//$PIN"); else CURL_TLS=(-k); fi
 TOKEN=$(jq -n --arg r "$VAULT_ROLE_ID" --arg s "$VAULT_SECRET_ID" '{role_id:$r,secret_id:$s}' | curl -sS "${CURL_TLS[@]}" --request POST --data @- "$VADDR/v1/auth/approle/login" | jq -r '.auth.client_token')
 if [ -z "$TOKEN" ] || [ "$TOKEN" = null ]; then echo "approle login failed"; exit 1; fi
 for ct in /etc/zfs/keys/*.ct; do

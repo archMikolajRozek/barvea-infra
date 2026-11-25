@@ -27,8 +27,9 @@ VADDR="https://10.10.0.50:8200"; ORGS_DS="hddpool/orgs"
 [ -f /etc/barvea/zfs-load-org.conf ] && . /etc/barvea/zfs-load-org.conf
 [ -f /etc/vault/storage-approle ] || { echo "FATAL: brak /etc/vault/storage-approle"; exit 1; }
 . /etc/vault/storage-approle
-# TLS Vaulta: przypięty cert listenera (bootstrap v2: /etc/barvea/vault-tls.crt); brak = -k z ostrzeżeniem (stary prod)
-if [ -n "${VAULT_CACERT:-}" ] && [ -f "$VAULT_CACERT" ]; then CURL_TLS=(--cacert "$VAULT_CACERT"); else CURL_TLS=(-k); echo "⚠️  brak VAULT_CACERT — curl bez weryfikacji TLS Vaulta (przypnij: pct pull 200 /opt/vault/tls/tls.crt /etc/barvea/vault-tls.crt + VAULT_CACERT w /etc/barvea/zfs-load-org.conf)"; fi
+# TLS Vaulta: przypięcie klucza publicznego listenera z /etc/barvea/vault-tls.crt (bootstrap v2; cert self-signed bez SAN →
+# --cacert nie przejdzie po nazwie, pin tak); brak pliku = -k z ostrzeżeniem
+if [ -n "${VAULT_CACERT:-}" ] && [ -f "$VAULT_CACERT" ]; then PIN=$(openssl x509 -in "$VAULT_CACERT" -pubkey -noout | openssl pkey -pubin -outform der | openssl dgst -sha256 -binary | base64); CURL_TLS=(-k --pinnedpubkey "sha256//$PIN"); else CURL_TLS=(-k); echo "⚠️  brak VAULT_CACERT — curl bez weryfikacji TLS Vaulta (przypnij: pct pull 200 /opt/vault/tls/tls.crt /etc/barvea/vault-tls.crt + VAULT_CACERT w /etc/barvea/zfs-load-org.conf)"; fi
 TEMPLATE="${TEMPLATE:-$REPO_DIR/storage/samba/per-org.conf.template}"
 [ -f "$TEMPLATE" ] || { echo "FATAL: brak $TEMPLATE"; exit 1; }
 [[ "$ORG_ID" =~ ^[a-z0-9]{20,32}$ ]] || { echo "FATAL: orgId nie wygląda na cuid: $ORG_ID"; exit 1; }
