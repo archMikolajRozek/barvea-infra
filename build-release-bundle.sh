@@ -1,150 +1,185 @@
 #!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════════
-# BARVEA — build-release-bundle.sh: buduje release-bundle dedyk z source
-# aplikacji (nasza strona #4). Uruchamiać na maszynie Z DOCKEREM + dostępem
-# do repo APP (my budujemy, klient dostaje gotowy bundle — nie ma dostępu
-# do naszych repo). Wynik → bundle/ dla deploy-app.dedicated.sh /
-# build-offline-assets.sh.
+# BARVEA — build-release-bundle.sh v2: buduje PODPISANĄ paczkę wydania
+# instalacji dedykowanej (D4, plan INSTALATOR-PLAN-2026-11.md).
 #
-# KLUCZOWE (kontrakt APP 2026-07-14): NEXT_PUBLIC_DEPLOYMENT_MODE=dedicated
-# musi być --build-arg (Next inline'uje NEXT_PUBLIC w BUILD, nie runtime).
-# MINIO_IMAGE_TAG + BARVEA_VERSION podstawia ten builder.
+# Uruchamiać U NAS, na barvea-app (VM 102): Docker + checkout repo APP +
+# ~/barvea/.env.production (AppRole Vault do podpisu). Klient dostaje
+# gotowy katalog paczki — nie ma dostępu do naszych repo ani Vaulta.
 #
-# ⚠️ SZKIELET/NIETESTOWANE — dokładne ścieżki/nazwy obrazów potwierdzić z
-#    APP (deploy/dedicated/ layout, Dockerfile args, dwg-converter build).
-#    Miejsca: # CONFIRM(APP).
+# Wynik (OUT):
+#   images.tar              wszystkie obrazy (app + sidecary + bazowe) — docker save
+#   compose.dedicated.yml   = APP deploy/dedicated/docker-compose.dedicated.yml
+#   env.template            = APP deploy/dedicated/.env.dedicated.template
+#   MANIFEST.json/.sig/.pub.pem  podpis Ed25519 (APP scripts/sign-release-manifest.ts, Vault transit)
+#   SHA256SUMS              sumy wszystkich plików paczki (kontrola transportu)
+#
+# Kontrakt z deploy-app.dedicated.sh v2: MANIFEST.json kanoniczny (klucze
+# posortowane), podpis nad jego bajtami, klucz publiczny = installer/update-manifest.pub.pem.
+# Weryfikacja u klienta: openssl pkeyutl -verify -pubin -inkey pub.pem -rawin -in MANIFEST.json -sigfile <(base64 -d MANIFEST.sig)
 #
 # Użycie: ./build-release-bundle.sh <APP_SRC_DIR> <VERSION> [OUT]
-#   APP_SRC_DIR = checkout repo aplikacji (git clone/pull u NAS)
-#   VERSION     = tag, np. 2026.07.14
+#   APP_SRC_DIR  checkout repo aplikacji (np. ~/barvea/app)
+#   VERSION      tag obrazów i paczki, np. 2026.11.25
+#   OUT          katalog paczki (domyślnie ./barvea-bundle-<VERSION>)
+# Zmienne: SIGN=0 (paczka bez podpisu — TYLKO testy; deploy-app odmówi bez ALLOW_UNSIGNED=1),
+#          ENV_FILE=~/barvea/.env.production (AppRole do podpisu), MINIO_IMAGE=minio/minio:<pin>,
+#          CLAMAV_IMAGE=clamav/clamav:<tag>, BUNDLE_PROFILES="pointcloud,collab,ifc,compact,av"
+#          (które moduły pakować; rdzeń zawsze), NO_CACHE=1 (docker build --no-cache).
 # ═══════════════════════════════════════════════════════════════════
 set -euo pipefail
 APP_SRC="${1:?podaj katalog źródeł aplikacji (checkout repo APP)}"
-VERSION="${2:?podaj wersję, np. 2026.07.14}"
-OUT="${3:-./barvea-assets/bundle}"
+VERSION="${2:?podaj wersję, np. 2026.11.25}"
+OUT="${3:-./barvea-bundle-$VERSION}"
+REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
+ENV_FILE="${ENV_FILE:-$HOME/barvea/.env.production}"
+SIGN="${SIGN:-1}"
+BUNDLE_PROFILES="${BUNDLE_PROFILES:-pointcloud,collab,ifc,compact,av}"
+INSTALLER_VERSION="$(tr -d '[:space:]' < "$REPO_DIR/INSTALLER_VERSION")"
 
-# Obrazy bazowe (APP CONFIRM 2026-07-14: postgres:18 [K2], redis:7-alpine).
-# minio: pin z proda — auto-detect z żywego kontenera barvea-minio (uruchamiaj
-# na maszynie z dostępem do proda, np. barvea-app), albo podaj MINIO_IMAGE=.
+# Obrazy bazowe — piny. MinIO: pin z proda (żywy kontener barvea-minio na starym
+# prodzie albo MINIO_IMAGE=); natywny MinIO prod = RELEASE.2025-09-07T16-13-09Z.
 PG_IMAGE="${PG_IMAGE:-postgres:18}"
 REDIS_IMAGE="${REDIS_IMAGE:-redis:7-alpine}"
-MINIO_IMAGE="${MINIO_IMAGE:-$(docker inspect barvea-minio --format '{{.Config.Image}}' 2>/dev/null || true)}"
-APP_IMAGE="barvea-app:$VERSION"       # VERSION = TAG obrazu (nie build-arg; APP)
-DWG_IMAGE="barvea-dwg-converter:$VERSION"
-OFFICE_IMAGE="barvea-office-converter:$VERSION"
-PCP_IMAGE="barvea-point-cloud-preview:$VERSION"
-COLLAB_IMAGE="barvea-collab:$VERSION"
+CADDY_IMAGE="${CADDY_IMAGE:-caddy:2-alpine}"
+MINIO_IMAGE="${MINIO_IMAGE:-$(docker inspect barvea-minio --format '{{.Config.Image}}' 2>/dev/null || echo minio/minio:RELEASE.2025-09-07T16-13-09Z)}"
+CLAMAV_IMAGE="${CLAMAV_IMAGE:-clamav/clamav:stable}"   # tag bez _base = obraz Z bazą sygnatur (air-gap OK)
 
 log() { printf '\n\033[1;36m── %s\033[0m\n' "$*"; }
 die() { printf '\033[1;31mFATAL: %s\033[0m\n' "$*" >&2; exit 1; }
-command -v docker >/dev/null || die "docker wymagany"
+has_profile() { case ",$BUNDLE_PROFILES," in *",$1,"*) return 0;; *) return 1;; esac; }
+command -v docker  >/dev/null || die "docker wymagany"
+command -v python3 >/dev/null || die "python3 wymagany (manifest-input.json)"
+command -v sha256sum >/dev/null || die "sha256sum wymagany"
 [ -d "$APP_SRC" ] || die "brak APP_SRC: $APP_SRC"
 [ -f "$APP_SRC/Dockerfile" ] || die "brak $APP_SRC/Dockerfile (root repo app)"
-[ -n "$MINIO_IMAGE" ] || die "MINIO_IMAGE nieustawione i brak kontenera barvea-minio — podaj MINIO_IMAGE=minio/minio:<pin>"
-mkdir -p "$OUT"
-
-# ── 1. Build obrazu app — TYLKO build-arg NEXT_PUBLIC_DEPLOYMENT_MODE
-#      (Next inline'uje w build; default ""=saas). Dockerfile=root, kontekst=root.
-#      VERSION = tag obrazu, NIE build-arg (APP CONFIRM). ──
-log "build $APP_IMAGE (NEXT_PUBLIC_DEPLOYMENT_MODE=dedicated inline)"
-docker build \
-  --build-arg NEXT_PUBLIC_DEPLOYMENT_MODE=dedicated \
-  -t "$APP_IMAGE" \
-  "$APP_SRC"
-
-# ── 2. dwg-converter (kontekst = docker/dwg-converter/; APP CONFIRM) ─
-if [ -f "$APP_SRC/docker/dwg-converter/Dockerfile" ]; then
-  log "build $DWG_IMAGE"
-  docker build -t "$DWG_IMAGE" "$APP_SRC/docker/dwg-converter"
-else
-  die "brak $APP_SRC/docker/dwg-converter/Dockerfile"
-fi
-
-# ── 2b. office-converter (LibreOffice → PDF; kontekst = docker/office-converter/) ─
-#      UWAGA: obraz ~1.5 GB — bundle rośnie o tyle w images.tar.
-#      TODO APP: deploy/dedicated/docker-compose.dedicated.yml nie ma jeszcze
-#      serwisu office-converter ani OFFICE_CONVERTER_URL — dopóki go nie doda,
-#      obraz jedzie w bundlu, ale dedyk go nie uruchomi.
-if [ -f "$APP_SRC/docker/office-converter/Dockerfile" ]; then
-  log "build $OFFICE_IMAGE"
-  docker build -t "$OFFICE_IMAGE" "$APP_SRC/docker/office-converter"
-else
-  die "brak $APP_SRC/docker/office-converter/Dockerfile"
-fi
-
-# ── 2c. point-cloud-preview (PDAL/conda-forge; kontekst = docker/point-cloud-preview/) ─
-#      TODO APP: compose.dedicated.yml bez tego serwisu — obraz jedzie w bundlu,
-#      dedyk go nie uruchomi, dopóki APP nie doda definicji (jak office).
-#      Deploy dedyk wymaga też scratch-dysku/TMPDIR — patrz docker-compose.yml proda.
-if [ -f "$APP_SRC/docker/point-cloud-preview/Dockerfile" ]; then
-  log "build $PCP_IMAGE"
-  docker build -t "$PCP_IMAGE" "$APP_SRC/docker/point-cloud-preview"
-else
-  die "brak $APP_SRC/docker/point-cloud-preview/Dockerfile"
-fi
-
-# ── 2d. collab (wspoledycja; kontekst = CALY $APP_SRC, plik collab-server/Dockerfile) ─
-#      TODO APP: compose.dedicated.yml bez uslugi collab — do czasu dodania
-#      wspoledycja w dedyku wylaczona (brak COLLAB_* = tryb jednego edytora).
-#      Reverse proxy klienta musi przepuszczac WebSocket /_collab (bez idle
-#      timeout < 60 s) i blokowac /api/v1/internal/*; sekrety = deploy-app.dedicated.sh.
-if [ -f "$APP_SRC/collab-server/Dockerfile" ]; then
-  log "build $COLLAB_IMAGE"
-  docker build -f "$APP_SRC/collab-server/Dockerfile" -t "$COLLAB_IMAGE" "$APP_SRC"
-else
-  die "brak $APP_SRC/collab-server/Dockerfile"
-fi
-
-# ── 3. Pull obrazów bazowych (dla air-gap = zapisane w images.tar) ─
-log "pull obrazów bazowych"
-for img in "$PG_IMAGE" "$REDIS_IMAGE" "$MINIO_IMAGE"; do
-  docker pull "$img"
-done
-
-# ── 4. docker save wszystkiego → images.tar ────────────────────────
-log "docker save → images.tar"
-# shellcheck disable=SC2086
-docker save $APP_IMAGE $DWG_IMAGE $OFFICE_IMAGE $PCP_IMAGE $COLLAB_IMAGE "$PG_IMAGE" "$REDIS_IMAGE" "$MINIO_IMAGE" \
-  -o "$OUT/images.tar"
-
-# ── 5. Compose + env-template z repo APP (ścieżki APP CONFIRM) ─────
-log "compose + env-template (deploy/dedicated/ od APP)"
 DD="$APP_SRC/deploy/dedicated"
 [ -f "$DD/docker-compose.dedicated.yml" ] || die "brak $DD/docker-compose.dedicated.yml"
-[ -f "$DD/.env.dedicated.template" ] || die "brak $DD/.env.dedicated.template (DOTFILE!)"
-cp "$DD/docker-compose.dedicated.yml" "$OUT/compose.dedicated.yml"
-cp "$DD/.env.dedicated.template" "$OUT/env.template"   # dotfile → env.template (nazwa deploy-app)
-# scripts/{bootstrap-instance,apply-license}.ts są W OBRAZIE app (exec npx tsx),
-# nie kopiujemy osobno — deploy-app woła `compose exec app npx tsx ...`.
+[ -f "$DD/.env.dedicated.template" ]     || die "brak $DD/.env.dedicated.template (dotfile!)"
+if [ "$SIGN" = 1 ]; then
+  [ -f "$ENV_FILE" ] || die "brak $ENV_FILE (AppRole Vault do podpisu) — albo SIGN=0 (paczka testowa)"
+  grep -qE '^VAULT_APPROLE_ROLE_ID=' "$ENV_FILE" || die "$ENV_FILE bez VAULT_APPROLE_ROLE_ID — podpis niemożliwy"
+fi
+mkdir -p "$OUT"; OUT="$(cd "$OUT" && pwd)"
+APP_COMMIT="$(git -C "$APP_SRC" rev-parse HEAD 2>/dev/null || echo unknown)"
+[ -z "$(git -C "$APP_SRC" status --porcelain 2>/dev/null)" ] || echo "⚠️  APP_SRC ma niezacommitowane zmiany — appCommit=$APP_COMMIT nie opisuje dokładnie paczki"
+BUILD_OPTS=(); [ "${NO_CACHE:-0}" = 1 ] && BUILD_OPTS+=(--no-cache)
 
-# ── 6. MANIFEST + (opcja) podpis update-manifest-ed25519 ───────────
-log "manifest"
-{
-  echo "barvea-release-bundle"
-  echo "version=$VERSION"
-  echo "buildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"
-  echo "deploymentMode=dedicated"
-  echo "images=$APP_IMAGE $DWG_IMAGE $OFFICE_IMAGE $PCP_IMAGE $COLLAB_IMAGE $PG_IMAGE $REDIS_IMAGE $MINIO_IMAGE"
-  echo "sha256(images.tar)=$(sha256sum "$OUT/images.tar" | cut -d' ' -f1)"
-} > "$OUT/MANIFEST.txt"
-cat "$OUT/MANIFEST.txt"
+# ── 1. Obrazy barvea-* (rdzeń zawsze; moduły wg BUNDLE_PROFILES) ───
+# VERSION = TAG obrazu (nie build-arg). app: TYLKO build-arg
+# NEXT_PUBLIC_DEPLOYMENT_MODE=dedicated (Next inline'uje NEXT_PUBLIC w build).
+declare -a SERVICES=() IMAGES=()
+build() { # build <service> <image> <dockerfile> <context> [build-args...]
+  local svc="$1" img="$2:$VERSION" df="$3" ctx="$4"; shift 4
+  [ -f "$df" ] || die "brak $df"
+  log "build $img ($svc)"
+  docker build "${BUILD_OPTS[@]}" "$@" -f "$df" -t "$img" "$ctx"
+  SERVICES+=("$svc"); IMAGES+=("$img")
+}
+build app              barvea-app                 "$APP_SRC/Dockerfile"                         "$APP_SRC" --build-arg NEXT_PUBLIC_DEPLOYMENT_MODE=dedicated
+build dwg-converter    barvea-dwg-converter       "$APP_SRC/docker/dwg-converter/Dockerfile"    "$APP_SRC/docker/dwg-converter"
+build office-converter barvea-office-converter    "$APP_SRC/docker/office-converter/Dockerfile" "$APP_SRC/docker/office-converter"
+has_profile pointcloud && build point-cloud-preview barvea-point-cloud-preview "$APP_SRC/docker/point-cloud-preview/Dockerfile" "$APP_SRC/docker/point-cloud-preview"
+if has_profile ifc; then
+  build ifc-clash     barvea-ifc-clash     "$APP_SRC/docker/ifc-clash/Dockerfile"     "$APP_SRC/docker/ifc-clash"
+  build ifc-extractor barvea-ifc-extractor "$APP_SRC/docker/ifc-extractor/Dockerfile" "$APP_SRC/docker/ifc-extractor"
+fi
+has_profile collab && build collab barvea-collab "$APP_SRC/collab-server/Dockerfile" "$APP_SRC"   # kontekst = CAŁE repo
 
-if [ "${SIGN:-0}" = 1 ]; then
-  # Podpis manifestu = W CAŁOŚCI NASZE (APP CONFIRM (d): APP NIE ma updatera,
-  # nie weryfikuje żadnego manifestu). Podpis I weryfikacja = nasz bundle-
-  # -updater (do napisania). update-manifest-ed25519 = SIGN-helper (ten sam
-  # klucz co auto-update WPF BarveaDrive). Format = jak licencja (payload
-  # b64url + ed25519 po bajtach ASCII segmentu) — nasz updater sprawdzi też
-  # buildDate vs licencja.updatesUntil. Wymaga VAULT_ADDR+VAULT_TOKEN.
-  IN=$(base64 -w0 "$OUT/MANIFEST.txt")
-  SIG=$(curl -fsS --cacert "${VAULT_CACERT:-/opt/vault/tls/tls.crt}" \
-    -H "X-Vault-Token: $VAULT_TOKEN" --data "{\"input\":\"$IN\"}" \
-    "$VAULT_ADDR/v1/transit/sign/update-manifest-ed25519" \
-    | grep -oP '(?<="signature":")[^"]+')
-  echo "$SIG" > "$OUT/MANIFEST.sig"
-  echo "  podpisano (update-manifest-ed25519) — weryfikacja: nasz updater"
+# ── 2. Obrazy bazowe (pull → w images.tar dla air-gap) ─────────────
+pull() { local svc="$1" img="$2"; log "pull $img ($svc)"; docker pull -q "$img" >/dev/null; SERVICES+=("$svc"); IMAGES+=("$img"); }
+pull caddy "$CADDY_IMAGE"
+if has_profile compact; then
+  pull postgres "$PG_IMAGE"; pull redis "$REDIS_IMAGE"; pull minio "$MINIO_IMAGE"
+  has_profile av && pull clamav "$CLAMAV_IMAGE"
 fi
 
-log "DONE → $OUT (images.tar + compose + env.template + MANIFEST)"
-echo "  Dalej: wrzuć bundle/ do nośnika air-gap (build-offline-assets.sh) albo"
-echo "  podaj BUNDLE_DIR=$OUT dla deploy-app.dedicated.sh."
+# ── 3. docker save → images.tar ────────────────────────────────────
+log "docker save ${#IMAGES[@]} obrazów → images.tar (chwilę potrwa)"
+docker save "${IMAGES[@]}" -o "$OUT/images.tar"
+TAR_SHA="$(sha256sum "$OUT/images.tar" | cut -d' ' -f1)"
+
+# ── 4. Pliki paczki od APP ─────────────────────────────────────────
+log "compose + env.template"
+cp "$DD/docker-compose.dedicated.yml" "$OUT/compose.dedicated.yml"
+cp "$DD/.env.dedicated.template"      "$OUT/env.template"
+# Kontrola: szablon env nie może nieść wartości sekretów (czysty szablon)
+if grep -E '^(NEXTAUTH_SECRET|TOTP_ENCRYPTION_KEY|DATABASE_URL|VAULT_APPROLE_SECRET_ID)=.+' "$OUT/env.template" >/dev/null; then
+  die "env.template zawiera wartości sekretów — szablon musi być pusty w polach [GEN]/[INFRA]"
+fi
+
+# ── 5. manifest-input.json (kontrakt sign-release-manifest.ts) ─────
+# images[]: service, image (repo bez tagu), tag, imageId=sha256:<64hex> (docker inspect .Id)
+log "manifest-input.json"
+MANIFEST_IMAGES=""
+for i in "${!IMAGES[@]}"; do
+  img="${IMAGES[$i]}"; id="$(docker inspect --format '{{.Id}}' "$img")"
+  MANIFEST_IMAGES+="${SERVICES[$i]}|${img%:*}|${img##*:}|${id}"$'\n'
+done
+PROFILES_LIST="$(printf '%s' "$BUNDLE_PROFILES" | tr ',' '\n' | sed '/^$/d')"
+MANIFEST_IMAGES="$MANIFEST_IMAGES" PROFILES_LIST="$PROFILES_LIST" \
+python3 - "$OUT" "$VERSION" "$APP_COMMIT" "$INSTALLER_VERSION" "$TAR_SHA" <<'PY'
+import datetime, hashlib, json, os, sys
+out, version, commit, inst_ver, tar_sha = sys.argv[1:6]
+def sha(p):
+    h = hashlib.sha256()
+    with open(p, 'rb') as f:
+        for c in iter(lambda: f.read(1 << 20), b''):
+            h.update(c)
+    return h.hexdigest()
+images = []
+for line in os.environ['MANIFEST_IMAGES'].splitlines():
+    if line.strip():
+        svc, image, tag, iid = line.split('|')
+        images.append({'service': svc, 'image': image, 'tag': tag, 'imageId': iid})
+files = [{'path': p, 'sha256': sha(f'{out}/{p}')} for p in ('compose.dedicated.yml', 'env.template')]
+m = {
+    'bundleVersion': version,
+    'buildDate': datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z'),
+    'appCommit': commit,
+    'deploymentMode': 'dedicated',
+    'minInstallerVersion': inst_ver,
+    'tarSha256': tar_sha,
+    'profiles': [p for p in os.environ['PROFILES_LIST'].splitlines() if p],
+    'images': images,
+    'files': files,
+}
+with open(f'{out}/manifest-input.json', 'w', encoding='utf-8') as f:
+    json.dump(m, f, indent=2, ensure_ascii=False)
+print(json.dumps({k: v for k, v in m.items() if k != 'images'}, ensure_ascii=False))
+print('images:', ', '.join(f"{i['image']}:{i['tag']}" for i in images))
+PY
+
+# ── 6. Podpis (APP sign-release-manifest.ts w obrazie builder, AppRole z ENV_FILE) ─
+# Obraz builder = ten sam wzorzec co skrypty diagnostyczne na prodzie (barvea-diag).
+# docker --env-file NIE zdejmuje cudzysłowów → filtr sed jak w runbookach.
+if [ "$SIGN" = 1 ]; then
+  log "podpis MANIFEST (Vault transit update-manifest-ed25519)"
+  docker build -q --target builder -t barvea-diag:latest "$APP_SRC" >/dev/null
+  ENVF="$(mktemp)"; chmod 600 "$ENVF"
+  grep -E '^(VAULT_ENDPOINT|VAULT_APPROLE_ROLE_ID|VAULT_APPROLE_SECRET_ID|VAULT_STRICT_SSL|VAULT_TOKEN)=' "$ENV_FILE" \
+    | sed -E "s/^([A-Za-z_0-9]+)=[\"'](.*)[\"']\$/\1=\2/" > "$ENVF"
+  docker run --rm --network host --env-file "$ENVF" -v "$OUT:/bundle" barvea-diag:latest \
+    npx -y tsx scripts/sign-release-manifest.ts /bundle || { rm -f "$ENVF"; die "podpis nieudany — paczka NIEWAŻNA"; }
+  rm -f "$ENVF"
+  # klucz z paczki = klucz wbudowany w instalator (rotacja = nowy PEM w repo + bump INSTALLER_VERSION)
+  if ! cmp -s "$OUT/MANIFEST.pub.pem" "$REPO_DIR/installer/update-manifest.pub.pem"; then
+    die "MANIFEST.pub.pem ≠ installer/update-manifest.pub.pem — klucz Vault zrotowany? zaktualizuj repo + INSTALLER_VERSION"
+  fi
+  # niezależna weryfikacja openssl — dokładnie to, co zrobi deploy-app u klienta
+  SIGBIN="$(mktemp)"; base64 -d "$OUT/MANIFEST.sig" > "$SIGBIN"
+  openssl pkeyutl -verify -pubin -inkey "$REPO_DIR/installer/update-manifest.pub.pem" -rawin -in "$OUT/MANIFEST.json" -sigfile "$SIGBIN" >/dev/null \
+    || { rm -f "$SIGBIN"; die "openssl nie weryfikuje podpisu — paczka NIEWAŻNA"; }
+  rm -f "$SIGBIN"; echo "  ✓ podpis zweryfikowany (openssl, klucz z repo)"
+  rm -f "$OUT/manifest-input.json"   # MANIFEST.json = kanoniczne źródło; wejście zbędne
+else
+  echo "⚠️  SIGN=0 — paczka BEZ podpisu (tylko testy; deploy-app wymaga ALLOW_UNSIGNED=1)"
+  mv "$OUT/manifest-input.json" "$OUT/MANIFEST.json"   # niepodpisany, nie-kanoniczny — tylko do odczytu wersji
+fi
+
+# ── 7. SHA256SUMS (kontrola transportu nośnika) ────────────────────
+( cd "$OUT" && sha256sum images.tar compose.dedicated.yml env.template MANIFEST.* > SHA256SUMS )
+log "DONE → $OUT"
+du -sh "$OUT" | sed 's/^/  rozmiar: /'
+echo "  Dalej: katalog na nośnik / do klienta → na hoście klienta: BUNDLE_DIR=<katalog> ./deploy-app.dedicated.sh"
+echo "  Kontrola po przeniesieniu: (cd <katalog> && sha256sum -c SHA256SUMS)"
