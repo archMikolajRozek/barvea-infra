@@ -12,15 +12,18 @@ ORGS_DS="hddpool/orgs"
 # bootstrap v2 (2026-11-24): pula orgów i adres Vaulta z konfiguracji (dedyk: pula bulk, inny LAN)
 [ -f /etc/barvea/zfs-load-org.conf ] && . /etc/barvea/zfs-load-org.conf
 . /etc/vault/storage-approle
-TOKEN=$(curl -sk --request POST --data "{\"role_id\":\"$VAULT_ROLE_ID\",\"secret_id\":\"$VAULT_SECRET_ID\"}" "$VADDR/v1/auth/approle/login" | jq -r '.auth.client_token')
+# (2026-11-25) TLS Vaulta: --cacert z przypiętym certem listenera (VAULT_CACERT z conf), bez pliku = -k jak dotąd;
+# AppRole JSON przez stdin, nie argv. Prod: wgrać ten plik + /etc/barvea/vault-tls.crt (pct pull 200 /opt/vault/tls/tls.crt).
+if [ -n "${VAULT_CACERT:-}" ] && [ -f "$VAULT_CACERT" ]; then CURL_TLS=(--cacert "$VAULT_CACERT"); else CURL_TLS=(-k); fi
+TOKEN=$(jq -n --arg r "$VAULT_ROLE_ID" --arg s "$VAULT_SECRET_ID" '{role_id:$r,secret_id:$s}' | curl -sS "${CURL_TLS[@]}" --request POST --data @- "$VADDR/v1/auth/approle/login" | jq -r '.auth.client_token')
 if [ -z "$TOKEN" ] || [ "$TOKEN" = null ]; then echo "approle login failed"; exit 1; fi
 for ct in /etc/zfs/keys/*.ct; do
   [ -e "$ct" ] || continue
   org=$(basename "$ct" .ct); ds="$ORGS_DS/$org"
   if [ "$(zfs get -H -o value keystatus "$ds" 2>/dev/null)" = available ]; then continue; fi
-  PT=$(jq -n --arg ct "$(cat "$ct")" '{ciphertext:$ct}' | curl -sk -H "X-Vault-Token: $TOKEN" --data @- "$VADDR/v1/transit/decrypt/per-org-keys" | jq -r '.data.plaintext')
+  PT=$(jq -n --arg ct "$(cat "$ct")" '{ciphertext:$ct}' | curl -sS "${CURL_TLS[@]}" -H "X-Vault-Token: $TOKEN" --data @- "$VADDR/v1/transit/decrypt/per-org-keys" | jq -r '.data.plaintext')
   printf '%s' "$PT" | base64 -d | zfs load-key "$ds"
   zfs mount "$ds" 2>/dev/null || true
   echo "unlocked: $ds"
 done
-curl -sk -H "X-Vault-Token: $TOKEN" --request POST "$VADDR/v1/auth/token/revoke-self" >/dev/null 2>&1 || true
+curl -sS "${CURL_TLS[@]}" -H "X-Vault-Token: $TOKEN" --request POST "$VADDR/v1/auth/token/revoke-self" >/dev/null 2>&1 || true

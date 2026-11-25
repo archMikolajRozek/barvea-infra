@@ -27,6 +27,8 @@ VADDR="https://10.10.0.50:8200"; ORGS_DS="hddpool/orgs"
 [ -f /etc/barvea/zfs-load-org.conf ] && . /etc/barvea/zfs-load-org.conf
 [ -f /etc/vault/storage-approle ] || { echo "FATAL: brak /etc/vault/storage-approle"; exit 1; }
 . /etc/vault/storage-approle
+# TLS Vaulta: przypięty cert listenera (bootstrap v2: /etc/barvea/vault-tls.crt); brak = -k z ostrzeżeniem (stary prod)
+if [ -n "${VAULT_CACERT:-}" ] && [ -f "$VAULT_CACERT" ]; then CURL_TLS=(--cacert "$VAULT_CACERT"); else CURL_TLS=(-k); echo "⚠️  brak VAULT_CACERT — curl bez weryfikacji TLS Vaulta (przypnij: pct pull 200 /opt/vault/tls/tls.crt /etc/barvea/vault-tls.crt + VAULT_CACERT w /etc/barvea/zfs-load-org.conf)"; fi
 TEMPLATE="${TEMPLATE:-$REPO_DIR/storage/samba/per-org.conf.template}"
 [ -f "$TEMPLATE" ] || { echo "FATAL: brak $TEMPLATE"; exit 1; }
 [[ "$ORG_ID" =~ ^[a-z0-9]{20,32}$ ]] || { echo "FATAL: orgId nie wygląda na cuid: $ORG_ID"; exit 1; }
@@ -42,10 +44,11 @@ if zfs list -H "$DS" >/dev/null 2>&1; then
   [ -f "$CTF" ] || { echo "FATAL: $DS istnieje, ale brak $CTF — nie da się odblokować po reboocie; napraw ręcznie"; exit 1; }
 else
   log "dataset $DS (klucz z Vault per-org-keys)"
-  TOKEN=$(curl -sk --request POST --data "{\"role_id\":\"$VAULT_ROLE_ID\",\"secret_id\":\"$VAULT_SECRET_ID\"}" "$VADDR/v1/auth/approle/login" | jq -r '.auth.client_token')
+  # AppRole JSON przez stdin (--data @-), nie argv (sekret niewidoczny w ps)
+  TOKEN=$(jq -n --arg r "$VAULT_ROLE_ID" --arg s "$VAULT_SECRET_ID" '{role_id:$r,secret_id:$s}' | curl -sS "${CURL_TLS[@]}" --request POST --data @- "$VADDR/v1/auth/approle/login" | jq -r '.auth.client_token')
   [ -n "$TOKEN" ] && [ "$TOKEN" != null ] || { echo "FATAL: approle login (Vault sealed?)"; exit 1; }
-  DK=$(curl -sk -H "X-Vault-Token: $TOKEN" --request POST "$VADDR/v1/transit/datakey/plaintext/per-org-keys")
-  curl -sk -H "X-Vault-Token: $TOKEN" --request POST "$VADDR/v1/auth/token/revoke-self" >/dev/null 2>&1 || true
+  DK=$(curl -sS "${CURL_TLS[@]}" -H "X-Vault-Token: $TOKEN" --request POST "$VADDR/v1/transit/datakey/plaintext/per-org-keys")
+  curl -sS "${CURL_TLS[@]}" -H "X-Vault-Token: $TOKEN" --request POST "$VADDR/v1/auth/token/revoke-self" >/dev/null 2>&1 || true
   PT=$(printf '%s' "$DK" | jq -r '.data.plaintext'); CTX=$(printf '%s' "$DK" | jq -r '.data.ciphertext')
   [ -n "$PT" ] && [ "$PT" != null ] && [ -n "$CTX" ] && [ "$CTX" != null ] || { echo "FATAL: datakey per-org-keys (polityka barvea-storage?)"; exit 1; }
   mkdir -p "$KEYDIR"; chmod 700 "$KEYDIR"

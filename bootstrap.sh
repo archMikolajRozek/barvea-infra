@@ -443,7 +443,10 @@ PYEOF
       # (przegląd 2026-11-24) AppRole z transit/decrypt per-org-keys ZOSTAJE TYLKO na hoście (zfs-load-org.sh);
       # LXC 201 go nie dostaje — gdyby datad/org-provision potrzebował Vaulta, osobna rola bez decrypt.
       # zfs-load-org.sh: pula orgów + adres Vaulta z konfiguracji (nie hardcode hddpool/10.10.0.50)
-      printf 'ORGS_DS=%s/orgs\nVADDR=https://%s.50:8200\n' "$ORGS_POOL" "$LAN" > /etc/barvea/zfs-load-org.conf
+      printf 'ORGS_DS=%s/orgs\nVADDR=https://%s.50:8200\nVAULT_CACERT=/etc/barvea/vault-tls.crt\n' "$ORGS_POOL" "$LAN" > /etc/barvea/zfs-load-org.conf
+      # (przegląd 2026-11-25) cert listenera Vaulta przypięty na hoście → curl --cacert zamiast -k
+      # (zfs-load-org.sh, provision-org.sh); działa z domyślnym self-signed i z certem z pki_int
+      pct pull 200 /opt/vault/tls/tls.crt /etc/barvea/vault-tls.crt && chmod 644 /etc/barvea/vault-tls.crt
       pct exec 200 -- rm -f /root/vault-out/barvea-app.secret_id /root/vault-out/barvea-storage.secret_id
       rm -rf "$VO"
       echo "  ✓ Vault zainicjowany; KLUCZE: /root/barvea-vault-keys.json w LXC 200 (pct pull 200 /root/barvea-vault-keys.json …) — ZABIERZ poza serwer i USUŃ."
