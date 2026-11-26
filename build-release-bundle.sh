@@ -42,7 +42,9 @@ INSTALLER_VERSION="$(tr -d '[:space:]' < "$REPO_DIR/INSTALLER_VERSION")"
 PG_IMAGE="${PG_IMAGE:-postgres:18}"
 REDIS_IMAGE="${REDIS_IMAGE:-redis:7-alpine}"
 CADDY_IMAGE="${CADDY_IMAGE:-caddy:2-alpine}"
-MINIO_IMAGE="${MINIO_IMAGE:-$(docker inspect barvea-minio --format '{{.Config.Image}}' 2>/dev/null || echo minio/minio:RELEASE.2025-09-07T16-13-09Z)}"
+# (prod ma MinIO natywnie — brak kontenera; docker inspect zostawiał pustą linię → „invalid reference format” 25.11)
+MINIO_IMAGE="${MINIO_IMAGE:-$( (docker inspect barvea-minio --format '{{.Config.Image}}' 2>/dev/null || true) | tr -d '[:space:]')}"
+[ -n "$MINIO_IMAGE" ] || MINIO_IMAGE="minio/minio:RELEASE.2025-09-07T16-13-09Z"
 CLAMAV_IMAGE="${CLAMAV_IMAGE:-clamav/clamav:stable}"   # tag bez _base = obraz Z bazą sygnatur (air-gap OK)
 
 log() { printf '\n\033[1;36m── %s\033[0m\n' "$*"; }
