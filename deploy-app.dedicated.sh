@@ -75,7 +75,8 @@ log "paczka: $BUNDLE_DIR"
 [ -d "$BUNDLE_DIR" ] || die "brak katalogu paczki: $BUNDLE_DIR"
 for f in images.tar compose.dedicated.yml env.template MANIFEST.json; do [ -f "$BUNDLE_DIR/$f" ] || die "brak $f w paczce"; done
 if [ -f "$BUNDLE_DIR/MANIFEST.sig" ]; then
-  cmp -s "$BUNDLE_DIR/MANIFEST.pub.pem" "$PUBKEY" 2>/dev/null || die "MANIFEST.pub.pem z paczki ≠ klucz instalatora ($PUBKEY) — paczka z innego klucza / inna wersja instalatora"
+  pubfp() { openssl pkey -pubin -in "$1" -outform DER 2>/dev/null | sha256sum | cut -d' ' -f1; }   # po DER, nie bajtowo (CRLF z Windows)
+  [ "$(pubfp "$BUNDLE_DIR/MANIFEST.pub.pem")" = "$(pubfp "$PUBKEY")" ] || die "MANIFEST.pub.pem z paczki ≠ klucz instalatora ($PUBKEY) — paczka z innego klucza / inna wersja instalatora"
   SIGBIN="$(mktemp)"; base64 -d "$BUNDLE_DIR/MANIFEST.sig" > "$SIGBIN"
   openssl pkeyutl -verify -pubin -inkey "$PUBKEY" -rawin -in "$BUNDLE_DIR/MANIFEST.json" -sigfile "$SIGBIN" >/dev/null 2>&1 \
     || { rm -f "$SIGBIN"; die "PODPIS MANIFESTU NIEPRAWIDŁOWY — paczka zmieniona albo nie od BARVEA. STOP."; }

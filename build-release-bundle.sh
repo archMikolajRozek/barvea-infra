@@ -180,7 +180,9 @@ if [ "$SIGN" = 1 ]; then
     npx -y tsx scripts/sign-release-manifest.ts /bundle || { rm -f "$ENVF"; die "podpis nieudany — paczka NIEWAŻNA"; }
   rm -f "$ENVF"
   # klucz z paczki = klucz wbudowany w instalator (rotacja = nowy PEM w repo + bump INSTALLER_VERSION)
-  if ! cmp -s "$OUT/MANIFEST.pub.pem" "$REPO_DIR/installer/update-manifest.pub.pem"; then
+  # porównanie po DER (nie bajt po bajcie): plik w repo może mieć CRLF/inne łamanie z Windows
+  pubfp() { openssl pkey -pubin -in "$1" -outform DER 2>/dev/null | sha256sum | cut -d' ' -f1; }
+  if [ "$(pubfp "$OUT/MANIFEST.pub.pem")" != "$(pubfp "$REPO_DIR/installer/update-manifest.pub.pem")" ]; then
     die "MANIFEST.pub.pem ≠ installer/update-manifest.pub.pem — klucz Vault zrotowany? zaktualizuj repo + INSTALLER_VERSION"
   fi
   # niezależna weryfikacja openssl — dokładnie to, co zrobi deploy-app u klienta
