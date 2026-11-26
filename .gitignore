@@ -39,3 +39,4 @@ __pycache__/
 graphify-out/
 .last-deployed-sha
 images/minio/minio.bin
+!installer/update-manifest.pub.pem
