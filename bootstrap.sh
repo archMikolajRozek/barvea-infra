@@ -373,6 +373,9 @@ SQLEOF
   #    Pin wersji = prod (RELEASE.2025-09-07T16-13-09Z); air-gap: binarki minio/mc w ASSETS_DIR.
   local MV="${MINIO_RELEASE:-RELEASE.2025-09-07T16-13-09Z}"
   local MB=/tmp/.minio.$$ MC=/tmp/.mc.$$
+  # 26.11.2026: MinIO NIE dystrybuuje już publicznie binariów (dl.min.io = 410 Gone) → binarki TYLKO z ASSETS_DIR
+  #   (nasza kopia z proda: minio.$MV + mc; build-release-bundle/offline-assets je dostarcza). fetch() próbuje ASSETS_DIR pierwszy.
+  [ -n "$ASSETS_DIR" ] && [ -f "$ASSETS_DIR/minio.$MV" ] && [ -f "$ASSETS_DIR/mc" ] || die "MinIO: brak $ASSETS_DIR/minio.$MV i/lub mc — dl.min.io nie serwuje już binariów; ustaw ASSETS_DIR z naszą kopią (barvea-assets)"
   fetch "https://dl.min.io/server/minio/release/linux-amd64/archive/minio.$MV" "$MB"
   fetch "https://dl.min.io/client/mc/release/linux-amd64/mc" "$MC"
   vm_put "$ip" "$MB" /usr/local/bin/minio; vm_put "$ip" "$MC" /usr/local/bin/mc; rm -f "$MB" "$MC"

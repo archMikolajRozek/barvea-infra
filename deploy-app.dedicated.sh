@@ -231,6 +231,7 @@ else
   fi
   if has_profile collab; then
     OV[COLLAB_INTERNAL_URL]="http://collab:1235"; OV[COLLAB_PUBLIC_URL]="wss://$APP_HOST/_collab"
+    OV[COLLAB_INTERNAL_WS_URL]="ws://collab:1234"   # edycja plików przez AI (handoff 26.11) — app łączy się z collab jak przeglądarka
     OV[COLLAB_SERVICE_TOKEN]="$(openssl rand -hex 32)"
     openssl genpkey -algorithm ed25519 -out "$T/ed.key" 2>/dev/null; openssl pkey -in "$T/ed.key" -pubout -out "$T/ed.pub" 2>/dev/null
     OV[COLLAB_JWT_PRIVATE_KEY]="\"$(pem1 "$T/ed.key")\""; OV[COLLAB_JWT_PUBLIC_KEY]="\"$(pem1 "$T/ed.pub")\""

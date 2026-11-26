@@ -93,10 +93,21 @@ pull() { local svc="$1" img="$2"; log "pull $img ($svc)"; docker pull -q "$img" 
 pull caddy "$CADDY_IMAGE"
 if has_profile compact; then
   pull postgres "$PG_IMAGE"; pull redis "$REDIS_IMAGE"
-  # MinIO: pull z quay.io, ale compose dedyka woła `minio/minio:${MINIO_IMAGE_TAG}` → retag pod tę nazwę (air-gap: żadnego pulla)
-  log "pull $MINIO_IMAGE (minio) → tag minio/minio:${MINIO_IMAGE##*:}"
-  docker pull -q "$MINIO_IMAGE" >/dev/null; docker tag "$MINIO_IMAGE" "minio/minio:${MINIO_IMAGE##*:}"
-  SERVICES+=(minio); IMAGES+=("minio/minio:${MINIO_IMAGE##*:}")
+  # MinIO (26.11.2026): MinIO NIE dystrybuuje już publicznie binariów ani obrazów (dl.min.io 410, Docker Hub/quay puste).
+  # Obraz budujemy z WŁASNEJ kopii binarki (prod VM 101 → ~/barvea-assets/minio.<RELEASE>), images/minio/Dockerfile,
+  # pod nazwą `minio/minio:<RELEASE>` = tak woła compose dedyka (MINIO_IMAGE_TAG). MINIO_IMAGE=... = pull zamiast builda (gdyby wrócił).
+  MINIO_REL="${MINIO_IMAGE##*:}"; MINIO_BIN="${MINIO_BIN:-$HOME/barvea-assets/minio.$MINIO_REL}"
+  if [ -f "$MINIO_BIN" ]; then
+    log "build minio/minio:$MINIO_REL z binarki $MINIO_BIN"
+    cp "$MINIO_BIN" "$REPO_DIR/images/minio/minio.bin"
+    docker build "${BUILD_OPTS[@]}" --build-arg MINIO_BIN=minio.bin -t "minio/minio:$MINIO_REL" "$REPO_DIR/images/minio"; rm -f "$REPO_DIR/images/minio/minio.bin"
+    docker run --rm "minio/minio:$MINIO_REL" --version | head -1 | grep -q "$MINIO_REL" || die "obraz minio nie zgłasza wersji $MINIO_REL"
+  else
+    log "pull $MINIO_IMAGE (minio) → tag minio/minio:$MINIO_REL   (brak binarki $MINIO_BIN — zwykle 410/401!)"
+    docker pull -q "$MINIO_IMAGE" >/dev/null || die "MinIO: pull $MINIO_IMAGE nieudany i brak binarki $MINIO_BIN (skopiuj z VM 101 /usr/local/bin/minio albo MINIO_BIN=)"
+    docker tag "$MINIO_IMAGE" "minio/minio:$MINIO_REL"
+  fi
+  SERVICES+=(minio); IMAGES+=("minio/minio:$MINIO_REL")
   has_profile av && pull clamav "$CLAMAV_IMAGE"
 fi
 
