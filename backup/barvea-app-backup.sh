@@ -29,6 +29,10 @@ restic backup /home/miko/barvea \
   --exclude='/home/miko/barvea/backups' \
   --host "$HOST" --tag compose --tag daily 2>&1 | tee -a "$LOG"
 
+# 26.11.2026: wlasny magazyn artefaktow (binarki MinIO/mc — MinIO nie dystrybuuje juz publicznie; obrazy paczek NIE — za duze)
+log "Artefakty (barvea-assets)..."
+[ -d /home/miko/barvea-assets ] && restic backup /home/miko/barvea-assets --host "$HOST" --tag assets --tag daily 2>&1 | tee -a "$LOG" || log "assets: brak katalogu"
+
 log "Docker volumes (Caddy + LE certs)..."
 restic backup \
   /var/lib/docker/volumes/barvea_caddy_data \
