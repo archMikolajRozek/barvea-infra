@@ -44,7 +44,7 @@ REDIS_IMAGE="${REDIS_IMAGE:-redis:7-alpine}"
 CADDY_IMAGE="${CADDY_IMAGE:-caddy:2-alpine}"
 # (prod ma MinIO natywnie — brak kontenera; docker inspect zostawiał pustą linię → „invalid reference format” 25.11)
 MINIO_IMAGE="${MINIO_IMAGE:-$( (docker inspect barvea-minio --format '{{.Config.Image}}' 2>/dev/null || true) | tr -d '[:space:]')}"
-[ -n "$MINIO_IMAGE" ] || MINIO_IMAGE="minio/minio:RELEASE.2025-09-07T16-13-09Z"
+[ -n "$MINIO_IMAGE" ] || MINIO_IMAGE="quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z"   # Docker Hub minio/minio już nie istnieje (26.11)
 CLAMAV_IMAGE="${CLAMAV_IMAGE:-clamav/clamav:stable}"   # tag bez _base = obraz Z bazą sygnatur (air-gap OK)
 
 log() { printf '\n\033[1;36m── %s\033[0m\n' "$*"; }
@@ -92,7 +92,11 @@ has_profile collab && build collab barvea-collab "$APP_SRC/collab-server/Dockerf
 pull() { local svc="$1" img="$2"; log "pull $img ($svc)"; docker pull -q "$img" >/dev/null; SERVICES+=("$svc"); IMAGES+=("$img"); }
 pull caddy "$CADDY_IMAGE"
 if has_profile compact; then
-  pull postgres "$PG_IMAGE"; pull redis "$REDIS_IMAGE"; pull minio "$MINIO_IMAGE"
+  pull postgres "$PG_IMAGE"; pull redis "$REDIS_IMAGE"
+  # MinIO: pull z quay.io, ale compose dedyka woła `minio/minio:${MINIO_IMAGE_TAG}` → retag pod tę nazwę (air-gap: żadnego pulla)
+  log "pull $MINIO_IMAGE (minio) → tag minio/minio:${MINIO_IMAGE##*:}"
+  docker pull -q "$MINIO_IMAGE" >/dev/null; docker tag "$MINIO_IMAGE" "minio/minio:${MINIO_IMAGE##*:}"
+  SERVICES+=(minio); IMAGES+=("minio/minio:${MINIO_IMAGE##*:}")
   has_profile av && pull clamav "$CLAMAV_IMAGE"
 fi
 
