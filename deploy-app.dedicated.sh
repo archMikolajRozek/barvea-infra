@@ -211,6 +211,8 @@ else
     OV[DRIVE_WG_PROVISION_URL]="http://${INFRA_IP}:8721"; OV[DRIVE_WG_PROVISION_TOKEN]="$WGT"; OV[DRIVE_WG_MANIFEST_TOKEN]="$WGT"
     WGIP="${WG_USERS_ADDR%/*}"
     OV[DRIVE_WG_ALLOWED_IPS]="${APP_IP}/32,${STORAGE_IP}/32,${WGIP}/32"; OV[DRIVE_WG_DNS]="$WGIP"
+    # mapa nazw tunelu → adresy dla fallbacku klienta Drive (NRPT z polityki domeny; decyzja 26.11: fallback TAK, hardcode NIE)
+    OV[DRIVE_WG_INTERNAL_HOSTS]="${APP_HOST}=${APP_IP},${DRIVE_HOST}=${STORAGE_IP}"
     if [ -n "${WG_PUBLIC_HOST:-}" ]; then OV[DRIVE_WG_ENDPOINT]="$WG_PUBLIC_HOST"
     else OV[DRIVE_WG_ENDPOINT]="$(ip -4 route get 1.1.1.1 2>/dev/null | grep -oP '(?<=src )\S+' || hostname -I | awk '{print $1}'):${WG_USERS_PORT}"; fi
     OV[DRIVE_WG_SERVER_PUBKEY]="$(ssh -o StrictHostKeyChecking=accept-new -i "$KEY" "$CI_USER@$INFRA_IP" 'sudo cat /etc/wireguard/server_public.key' | tr -d '\n')"
